@@ -4,7 +4,6 @@ import tabulate
 import os
 
 from urllib.request import urlopen
-from pprint import pprint
 
 
 workspace = os.path.dirname(os.path.realpath(__file__))
@@ -63,12 +62,14 @@ class Scraper:
 
         return warframes_arbitrage
     
+    # Transform market_name to display_name
     def market_name_to_name(self, market_name):
         for warframe in self.prime_warframes:
             if warframe['market_name'] == market_name:
                 return warframe['name']
         return None
 
+    # Filter orders to only include valid orders (ingame, pc and seller)
     def filter_orders(self, orders):
         filtered_orders = []
         for order in orders:
@@ -80,6 +81,7 @@ class Scraper:
         
         return filtered_orders
     
+    # Filter arbitrage to only keep warframes with arbitrage > min_arbitrage
     def filter_arbitrage(self, warframes_arbitrage):
         filtered_arbitrage = {}
         for warframe_name, warframe_arbitrage in warframes_arbitrage.items():
@@ -89,6 +91,7 @@ class Scraper:
 
         return filtered_arbitrage
 
+    # Get lowest price for a given item
     def get_lowest_price(self, item_name):
         url = self.api_url + item_name + "/orders"
 
@@ -109,6 +112,7 @@ class Scraper:
 
         return lowest_price
 
+    # Construct dict of warframe parts with their respective market names
     def construct_warframes_items(self):
         warframes_items = {}
 
@@ -127,6 +131,7 @@ class Scraper:
         
         return warframes_items
 
+    # Construct dict of warframe parts with their respective prices
     def construct_warframes_prices(self, warframes_items):
         warframes_prices = {}
 
@@ -167,6 +172,7 @@ class Scraper:
         print('\n')
         return warframes_prices
     
+    # Construct dict of warframes with their respective arbitrage
     def construct_warframes_arbitrage(self, warframes_prices):
         warframes_arbitrage = {}
 
@@ -174,25 +180,29 @@ class Scraper:
             warframes_arbitrage[warframe_name] = {}
             total_parts_price = 0
 
+            # Get part prices
             for part_type, part_price in warframe_prices.items():
                 if part_type != 'set':
                     total_parts_price += part_price
             
+            # Check if part prices are greater than set price or not
             if total_parts_price >= warframe_prices['set']:
                 warframes_arbitrage[warframe_name]['arbitrage'] = total_parts_price - warframe_prices['set']
             else:
                 warframes_arbitrage[warframe_name]['arbitrage'] = warframe_prices['set'] - total_parts_price
 
+            # Set arbitrage data
             warframes_arbitrage[warframe_name]['parts_price'] = total_parts_price
             warframes_arbitrage[warframe_name]['set_price'] = warframe_prices['set']
             warframes_arbitrage[warframe_name]['market_url'] = self.market_url + warframe_name
             warframes_arbitrage[warframe_name]['display_name'] = self.market_name_to_name(warframe_name)
-            
+        
+        # Remove warframes with arbitrage less than min_arbitrage
         warframes_arbitrage = self.filter_arbitrage(warframes_arbitrage)
 
         return warframes_arbitrage
 
-
+# Run app
 def main():
     prime_warframes = load_prime_warframes()
     scraper = Scraper(
