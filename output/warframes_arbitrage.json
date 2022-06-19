@@ -1,47 +1,226 @@
-[
-    [
-        "mag_prime",
-        {
-            "arbitrage": 57,
-            "parts_price": 138,
-            "set_price": 195,
-            "market_url": "https://warframe.market/items//mag_prime"
-        }
-    ],
-    [
-        "loki_prime",
-        {
-            "arbitrage": 45,
-            "parts_price": 149,
-            "set_price": 194,
-            "market_url": "https://warframe.market/items//loki_prime"
-        }
-    ],
-    [
-        "trinity_prime",
-        {
-            "arbitrage": 36,
-            "parts_price": 63,
-            "set_price": 99,
-            "market_url": "https://warframe.market/items//trinity_prime"
-        }
-    ],
-    [
-        "vauban_prime",
-        {
-            "arbitrage": 35,
-            "parts_price": 155,
-            "set_price": 190,
-            "market_url": "https://warframe.market/items//vauban_prime"
-        }
-    ],
-    [
-        "nekros_prime",
-        {
-            "arbitrage": 31,
-            "parts_price": 167,
-            "set_price": 198,
-            "market_url": "https://warframe.market/items//nekros_prime"
-        }
-    ]
-]
+{
+    "frost_prime": {
+        "arbitrage": 12,
+        "parts_price": 108,
+        "set_price": 120,
+        "market_url": "https://warframe.market/items/frost_prime",
+        "display_name": "Frost Prime"
+    },
+    "mag_prime": {
+        "arbitrage": 53,
+        "parts_price": 137,
+        "set_price": 190,
+        "market_url": "https://warframe.market/items/mag_prime",
+        "display_name": "Mag Prime"
+    },
+    "ember_prime": {
+        "arbitrage": 25,
+        "parts_price": 78,
+        "set_price": 103,
+        "market_url": "https://warframe.market/items/ember_prime",
+        "display_name": "Ember Prime"
+    },
+    "rhino_prime": {
+        "arbitrage": 20,
+        "parts_price": 73,
+        "set_price": 93,
+        "market_url": "https://warframe.market/items/rhino_prime",
+        "display_name": "Rhino Prime"
+    },
+    "loki_prime": {
+        "arbitrage": 44,
+        "parts_price": 146,
+        "set_price": 190,
+        "market_url": "https://warframe.market/items/loki_prime",
+        "display_name": "Loki Prime"
+    },
+    "nyx_prime": {
+        "arbitrage": 5,
+        "parts_price": 50,
+        "set_price": 55,
+        "market_url": "https://warframe.market/items/nyx_prime",
+        "display_name": "Nyx Prime"
+    },
+    "nova_prime": {
+        "arbitrage": 23,
+        "parts_price": 72,
+        "set_price": 95,
+        "market_url": "https://warframe.market/items/nova_prime",
+        "display_name": "Nova Prime"
+    },
+    "volt_prime": {
+        "arbitrage": 21,
+        "parts_price": 94,
+        "set_price": 115,
+        "market_url": "https://warframe.market/items/volt_prime",
+        "display_name": "Volt Prime"
+    },
+    "ash_prime": {
+        "arbitrage": 5,
+        "parts_price": 175,
+        "set_price": 180,
+        "market_url": "https://warframe.market/items/ash_prime",
+        "display_name": "Ash Prime"
+    },
+    "trinity_prime": {
+        "arbitrage": 32,
+        "parts_price": 68,
+        "set_price": 100,
+        "market_url": "https://warframe.market/items/trinity_prime",
+        "display_name": "Trinity Prime"
+    },
+    "saryn_prime": {
+        "arbitrage": 19,
+        "parts_price": 171,
+        "set_price": 190,
+        "market_url": "https://warframe.market/items/saryn_prime",
+        "display_name": "Saryn Prime"
+    },
+    "vauban_prime": {
+        "arbitrage": 23,
+        "parts_price": 167,
+        "set_price": 190,
+        "market_url": "https://warframe.market/items/vauban_prime",
+        "display_name": "Vauban Prime"
+    },
+    "nekros_prime": {
+        "arbitrage": 27,
+        "parts_price": 170,
+        "set_price": 197,
+        "market_url": "https://warframe.market/items/nekros_prime",
+        "display_name": "Nekros Prime"
+    },
+    "valkyr_prime": {
+        "arbitrage": 22,
+        "parts_price": 68,
+        "set_price": 90,
+        "market_url": "https://warframe.market/items/valkyr_prime",
+        "display_name": "Valkyr Prime"
+    },
+    "banshee_prime": {
+        "arbitrage": 5,
+        "parts_price": 44,
+        "set_price": 49,
+        "market_url": "https://warframe.market/items/banshee_prime",
+        "display_name": "Banshee Prime"
+    },
+    "oberon_prime": {
+        "arbitrage": 22,
+        "parts_price": 78,
+        "set_price": 100,
+        "market_url": "https://warframe.market/items/oberon_prime",
+        "display_name": "Oberon Prime"
+    },
+    "hydroid_prime": {
+        "arbitrage": 31,
+        "parts_price": 84,
+        "set_price": 115,
+        "market_url": "https://warframe.market/items/hydroid_prime",
+        "display_name": "Hydroid Prime"
+    },
+    "mirage_prime": {
+        "arbitrage": 8,
+        "parts_price": 61,
+        "set_price": 69,
+        "market_url": "https://warframe.market/items/mirage_prime",
+        "display_name": "Mirage Prime"
+    },
+    "zephyr_prime": {
+        "arbitrage": 10,
+        "parts_price": 40,
+        "set_price": 50,
+        "market_url": "https://warframe.market/items/zephyr_prime",
+        "display_name": "Zephyr Prime"
+    },
+    "limbo_prime": {
+        "arbitrage": 5,
+        "parts_price": 110,
+        "set_price": 115,
+        "market_url": "https://warframe.market/items/limbo_prime",
+        "display_name": "Limbo Prime"
+    },
+    "mesa_prime": {
+        "arbitrage": 20,
+        "parts_price": 60,
+        "set_price": 80,
+        "market_url": "https://warframe.market/items/mesa_prime",
+        "display_name": "Mesa Prime"
+    },
+    "equinox_prime": {
+        "arbitrage": 26,
+        "parts_price": 44,
+        "set_price": 70,
+        "market_url": "https://warframe.market/items/equinox_prime",
+        "display_name": "Equinox Prime"
+    },
+    "wukong_prime": {
+        "arbitrage": 9,
+        "parts_price": 66,
+        "set_price": 75,
+        "market_url": "https://warframe.market/items/wukong_prime",
+        "display_name": "Wukong Prime"
+    },
+    "atlas_prime": {
+        "arbitrage": 4,
+        "parts_price": 45,
+        "set_price": 49,
+        "market_url": "https://warframe.market/items/atlas_prime",
+        "display_name": "Atlas Prime"
+    },
+    "titania_prime": {
+        "arbitrage": 3,
+        "parts_price": 36,
+        "set_price": 39,
+        "market_url": "https://warframe.market/items/titania_prime",
+        "display_name": "Titania Prime"
+    },
+    "inaros_prime": {
+        "arbitrage": 2,
+        "parts_price": 25,
+        "set_price": 27,
+        "market_url": "https://warframe.market/items/inaros_prime",
+        "display_name": "Inaros Prime"
+    },
+    "nezha_prime": {
+        "arbitrage": 3,
+        "parts_price": 38,
+        "set_price": 35,
+        "market_url": "https://warframe.market/items/nezha_prime",
+        "display_name": "Nezha Prime"
+    },
+    "octavia_prime": {
+        "arbitrage": 6,
+        "parts_price": 34,
+        "set_price": 40,
+        "market_url": "https://warframe.market/items/octavia_prime",
+        "display_name": "Octavia Prime"
+    },
+    "gara_prime": {
+        "arbitrage": 5,
+        "parts_price": 30,
+        "set_price": 35,
+        "market_url": "https://warframe.market/items/gara_prime",
+        "display_name": "Gara Prime"
+    },
+    "nidus_prime": {
+        "arbitrage": 7,
+        "parts_price": 38,
+        "set_price": 45,
+        "market_url": "https://warframe.market/items/nidus_prime",
+        "display_name": "Nidus Prime"
+    },
+    "harrow_prime": {
+        "arbitrage": 6,
+        "parts_price": 47,
+        "set_price": 53,
+        "market_url": "https://warframe.market/items/harrow_prime",
+        "display_name": "Harrow Prime"
+    },
+    "garuda_prime": {
+        "arbitrage": 11,
+        "parts_price": 68,
+        "set_price": 79,
+        "market_url": "https://warframe.market/items/garuda_prime",
+        "display_name": "Garuda Prime"
+    }
+}

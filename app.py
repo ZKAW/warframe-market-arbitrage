@@ -1,5 +1,6 @@
 import json
 import time
+import tabulate
 import os
 
 from urllib.request import urlopen
@@ -21,6 +22,26 @@ def write_json(filename, data):
 def load_prime_warframes():
     return load_json(os.path.join(workspace, 'assets', 'prime_warframes.json'))
 
+def sort_table(table, index):
+    return sorted(table, key=lambda x: x[index])
+
+def print_table(results):
+    headers = ['Warframe', 'Arbitration', 'Set Price', 'Parts Price', 'Market URL']
+    table = []
+
+
+    for market_name, arbitration_data in results.items():
+        table.append([
+            arbitration_data['display_name'],
+            arbitration_data['arbitrage'],
+            arbitration_data['set_price'],
+            arbitration_data['parts_price'],
+            arbitration_data['market_url']
+        ])
+    
+    sorted_results = reversed(sort_table(table, 1))
+
+    print(tabulate.tabulate(sorted_results, headers=headers, tablefmt='orgtbl'))
 
 class Scraper:
     market_url = "https://warframe.market/items/"
@@ -34,14 +55,13 @@ class Scraper:
         warframes_items = self.construct_warframes_items()
         warframes_prices = self.construct_warframes_prices(warframes_items)
         warframes_arbitrage = self.construct_warframes_arbitrage(warframes_prices)
-        warframes_arbitrage = self.filter_arbitrage(warframes_arbitrage)
-        sorted_arbitrage = sorted(warframes_arbitrage.items(), key=lambda x: x[1]['arbitrage'], reverse=True)
+        # sorted_arbitrage = sorted(warframes_arbitrage.items(), key=lambda x: x[1]['arbitrage'], reverse=True)
 
         # Write output
         if not os.path.exists(os.path.join(workspace, 'output')): os.makedirs(os.path.join(workspace, 'output'))
-        write_json(os.path.join(workspace, 'output', 'warframes_arbitrage.json'), sorted_arbitrage)
+        write_json(os.path.join(workspace, 'output', 'warframes_arbitrage.json'), warframes_arbitrage)
 
-        return sorted_arbitrage
+        return warframes_arbitrage
     
     def market_name_to_name(self, market_name):
         for warframe in self.prime_warframes:
@@ -137,11 +157,12 @@ class Scraper:
 
                         time.sleep(1.5)
                         continue
-
+            
             # Warframe progress counter
             display_name = self.market_name_to_name(warframe_name)
             print(f"Processed {count}/{len(warframes_items)} warframes ({display_name})"+" "*10, end='\r')
             time.sleep(.5)
+            # break
 
         print('\n')
         return warframes_prices
@@ -164,11 +185,11 @@ class Scraper:
 
             warframes_arbitrage[warframe_name]['parts_price'] = total_parts_price
             warframes_arbitrage[warframe_name]['set_price'] = warframe_prices['set']
-            warframes_arbitrage[warframe_name]['market_url'] = self.market_url + '/' + warframe_name
+            warframes_arbitrage[warframe_name]['market_url'] = self.market_url + warframe_name
+            warframes_arbitrage[warframe_name]['display_name'] = self.market_name_to_name(warframe_name)
             
         warframes_arbitrage = self.filter_arbitrage(warframes_arbitrage)
 
-        print('\n')
         return warframes_arbitrage
 
 
@@ -180,7 +201,7 @@ def main():
     )
 
     results = scraper.run()
-    pprint(results)
+    print_table(results)
 
 if __name__ == '__main__':
     main()
