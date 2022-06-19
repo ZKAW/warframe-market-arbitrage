@@ -1,0 +1,47 @@
+[
+    [
+        "mag_prime",
+        {
+            "arbitrage": 57,
+            "parts_price": 138,
+            "set_price": 195,
+            "market_url": "https://warframe.market/items//mag_prime"
+        }
+    ],
+    [
+        "loki_prime",
+        {
+            "arbitrage": 45,
+            "parts_price": 149,
+            "set_price": 194,
+            "market_url": "https://warframe.market/items//loki_prime"
+        }
+    ],
+    [
+        "trinity_prime",
+        {
+            "arbitrage": 36,
+            "parts_price": 63,
+            "set_price": 99,
+            "market_url": "https://warframe.market/items//trinity_prime"
+        }
+    ],
+    [
+        "vauban_prime",
+        {
+            "arbitrage": 35,
+            "parts_price": 155,
+            "set_price": 190,
+            "market_url": "https://warframe.market/items//vauban_prime"
+        }
+    ],
+    [
+        "nekros_prime",
+        {
+            "arbitrage": 31,
+            "parts_price": 167,
+            "set_price": 198,
+            "market_url": "https://warframe.market/items//nekros_prime"
+        }
+    ]
+]

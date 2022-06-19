@@ -1,0 +1,134 @@
+[
+    {
+        "name": "Frost Prime",
+        "market_name": "frost_prime"
+    },
+    {
+        "name": "Mag Prime",
+        "market_name": "mag_prime"
+    },
+    {
+        "name": "Ember Prime",
+        "market_name": "ember_prime"
+    },
+    {
+        "name": "Rhino Prime",
+        "market_name": "rhino_prime"
+    },
+    {
+        "name": "Loki Prime",
+        "market_name": "loki_prime"
+    },
+    {
+        "name": "Nyx Prime",
+        "market_name": "nyx_prime"
+    },
+    {
+        "name": "Nova Prime",
+        "market_name": "nova_prime"
+    },
+    {
+        "name": "Volt Prime",
+        "market_name": "volt_prime"
+    },
+    {
+        "name": "Ash Prime",
+        "market_name": "ash_prime"
+    },
+    {
+        "name": "Trinity Prime",
+        "market_name": "trinity_prime"
+    },
+    {
+        "name": "Saryn Prime",
+        "market_name": "saryn_prime"
+    },
+    {
+        "name": "Vauban Prime",
+        "market_name": "vauban_prime"
+    },
+    {
+        "name": "Nekros Prime",
+        "market_name": "nekros_prime"
+    },
+    {
+        "name": "Valkyr Prime",
+        "market_name": "valkyr_prime"
+    },
+    {
+        "name": "Banshee Prime",
+        "market_name": "banshee_prime"
+    },
+    {
+        "name": "Oberon Prime",
+        "market_name": "oberon_prime"
+    },
+    {
+        "name": "Hydroid Prime",
+        "market_name": "hydroid_prime"
+    },
+    {
+        "name": "Mirage Prime",
+        "market_name": "mirage_prime"
+    },
+    {
+        "name": "Zephyr Prime",
+        "market_name": "zephyr_prime"
+    },
+    {
+        "name": "Limbo Prime",
+        "market_name": "limbo_prime"
+    },
+    {
+        "name": "Mesa Prime",
+        "market_name": "mesa_prime"
+    },
+    {
+        "name": "Equinox Prime",
+        "market_name": "equinox_prime"
+    },
+    {
+        "name": "Wukong Prime",
+        "market_name": "wukong_prime"
+    },
+    {
+        "name": "Atlas Prime",
+        "market_name": "atlas_prime"
+    },
+    {
+        "name": "Ivara Prime",
+        "market_name": "ivara_prime"
+    },
+    {
+        "name": "Titania Prime",
+        "market_name": "titania_prime"
+    },
+    {
+        "name": "Inaros Prime",
+        "market_name": "inaros_prime"
+    },
+    {
+        "name": "Nezha Prime",
+        "market_name": "nezha_prime"
+    },
+    {
+        "name": "Octavia Prime",
+        "market_name": "octavia_prime"
+    },
+    {
+        "name": "Gara Prime",
+        "market_name": "gara_prime"
+    },
+    {
+        "name": "Nidus Prime",
+        "market_name": "nidus_prime"
+    },
+    {
+        "name": "Harrow Prime",
+        "market_name": "harrow_prime"
+    },
+    {
+        "name": "Garuda Prime",
+        "market_name": "garuda_prime"
+    }
+]
