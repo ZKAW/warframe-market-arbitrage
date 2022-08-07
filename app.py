@@ -21,6 +21,9 @@ def write_json(filename, data):
 def load_prime_warframes():
     return load_json(os.path.join(workspace, 'assets', 'prime_warframes.json'))
 
+def load_config():
+    return load_json(os.path.join(workspace, 'config.json'))
+
 def sort_table(table, index):
     return sorted(table, key=lambda x: x[index])
 
@@ -207,7 +210,7 @@ def main():
     prime_warframes = load_prime_warframes()
     scraper = Scraper(
         prime_warframes,
-        min_arbitrage=20
+        min_arbitrage=load_config()['min_arbitrage'],
     )
 
     results = scraper.run()
