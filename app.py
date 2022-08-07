@@ -207,7 +207,7 @@ def main():
     prime_warframes = load_prime_warframes()
     scraper = Scraper(
         prime_warframes,
-        min_arbitrage=30
+        min_arbitrage=20
     )
 
     results = scraper.run()
