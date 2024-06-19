@@ -1,2 +1,4 @@
 *.code-workspace
 output/*
+__pycache__
+.vscode

@@ -1,220 +1,98 @@
-import json
+import requests
 import time
-import tabulate
-import os
+import json
 
-from urllib.request import urlopen
-
-
-workspace = os.path.dirname(os.path.realpath(__file__))
-
-
-def load_json(filename):
-    with open(filename) as f:
+def read_config():
+    with open('config.json') as f:
         return json.load(f)
 
-def write_json(filename, data):
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent=4)
-    return data
+def fetch_all_items():
+    response = requests.get('https://api.warframe.market/v1/items')
+    return response.json()['payload']['items']
 
-def load_prime_warframes():
-    return load_json(os.path.join(workspace, 'assets', 'prime_warframes.json'))
+def find_eligible_sets(items):
+    return [item for item in items if item['url_name'].endswith('_set')]
 
-def load_config():
-    return load_json(os.path.join(workspace, 'config.json'))
+def find_related_parts(set_name, all_items):
+    base_name = set_name.replace('_set', '')
+    return [item['url_name'] for item in all_items if item['url_name'].startswith(base_name) and not item['url_name'].endswith('_set')]
 
-def sort_table(table, index):
-    return sorted(table, key=lambda x: x[index])
-
-def print_table(results):
-    headers = ['Warframe', 'Arbitration', 'Set Price', 'Parts Price', 'Market URL']
-    table = []
-
-
-    for market_name, arbitration_data in results.items():
-        table.append([
-            arbitration_data['display_name'],
-            arbitration_data['arbitrage'],
-            arbitration_data['set_price'],
-            arbitration_data['parts_price'],
-            arbitration_data['market_url']
-        ])
-    
-    sorted_results = reversed(sort_table(table, 1))
-
-    print(tabulate.tabulate(sorted_results, headers=headers, tablefmt='orgtbl'))
-
-class Scraper:
-    market_url = "https://warframe.market/items/"
-    api_url = "https://api.warframe.market/v1/items/"
-
-    def __init__(self, prime_warframes, min_arbitrage=20):
-        self.prime_warframes = prime_warframes
-        self.min_arbitrage = min_arbitrage
-    
-    def run(self):
-        warframes_items = self.construct_warframes_items()
-        warframes_prices = self.construct_warframes_prices(warframes_items)
-        warframes_arbitrage = self.construct_warframes_arbitrage(warframes_prices)
-        # sorted_arbitrage = sorted(warframes_arbitrage.items(), key=lambda x: x[1]['arbitrage'], reverse=True)
-
-        # Write output
-        if not os.path.exists(os.path.join(workspace, 'output')): os.makedirs(os.path.join(workspace, 'output'))
-        write_json(os.path.join(workspace, 'output', 'warframes_arbitrage.json'), warframes_arbitrage)
-
-        return warframes_arbitrage
-    
-    # Transform market_name to display_name
-    def market_name_to_name(self, market_name):
-        for warframe in self.prime_warframes:
-            if warframe['market_name'] == market_name:
-                return warframe['name']
+def fetch_item_price(item_name):
+    # print("Fetching item price for:", item_name)
+    response = requests.get(f'https://api.warframe.market/v1/items/{item_name}/orders')
+    if response.status_code == 404:
         return None
+    # if the error is a rate limit error, wait for a few seconds and try again
+    if response.status_code != 200:
+        print("Rate limited. Waiting for 1 seconds...")
+        time.sleep(1)
+        return fetch_item_price(item_name)
+    orders = response.json()['payload']['orders']
+    prices = [
+        order['platinum'] for order in orders
+        if order['order_type'] == 'sell'
+        and order['region'] == 'en'
+        and order['platform'] == 'pc'
+        and order['user']['status'] == 'ingame'
+    ]
+    return min(prices) if prices else None
 
-    # Filter orders to only include valid orders (ingame, pc and seller)
-    def filter_orders(self, orders):
-        filtered_orders = []
-        for order in orders:
-            if order['user']['status'] != 'ingame': continue
-            elif order['platform'] != 'pc': continue
-            elif order['order_type'] != 'sell': continue
+def find_arbitrage_opportunities(sets, all_items):
+    opportunities = []
+    MIN_ARBITRAGE_VALUE = read_config()['MIN_ARBITRAGE_VALUE']
 
-            filtered_orders.append(order)
-        
-        return filtered_orders
-    
-    # Filter arbitrage to only keep warframes with arbitrage > min_arbitrage
-    def filter_arbitrage(self, warframes_arbitrage):
-        filtered_arbitrage = {}
-        for warframe_name, warframe_arbitrage in warframes_arbitrage.items():
-            if warframe_arbitrage['arbitrage'] < self.min_arbitrage:
-                continue
-            filtered_arbitrage[warframe_name] = warframe_arbitrage
+    for set_item in sets:
+        set_name = set_item['url_name']
+        set_price = fetch_item_price(set_name)
+        time.sleep(0.1)
 
-        return filtered_arbitrage
+        if set_price is None or not set_price:
+            continue
 
-    # Get lowest price for a given item
-    def get_lowest_price(self, item_name):
-        url = self.api_url + item_name + "/orders"
+        print(f"Checking arbitrage opportunities for {set_name}...")
+        part_names = find_related_parts(set_name, all_items)
+        # print(f"Related parts for {set_name}: {part_names}")
+        part_prices = []
+        for part_name in part_names:
+            price = fetch_item_price(part_name)
+            time.sleep(0.1)
+            if price is None:
+                part_prices = [None]
+                break
+            # print(f"Price for {part_name}: {price}")
+            part_prices.append(price)
 
-        # Get orders
-        main_url = urlopen(url)
-        data = main_url.read()
-        parsed = json.loads(data)
+        if None in part_prices:
+            print(f"Failed to fetch prices for {set_name}. Skipping...")
+            continue
 
-        # Filter orders
-        orders = parsed['payload']['orders']
-        filtered_orders = self.filter_orders(orders)
+        # print(f"{set_name}: Set price: {set_price}, Part prices: {part_prices}")
+        total_part_price = sum(part_prices)
+        if total_part_price == 0:
+            continue
+        arbitrage_value = set_price - total_part_price
 
-        # Get lowest price
-        lowest_price = filtered_orders[0]['platinum']
-        for order in filtered_orders:
-            if order['platinum'] < lowest_price:
-                lowest_price = order['platinum']
+        if arbitrage_value > MIN_ARBITRAGE_VALUE:
+            opportunities.append({
+                'set': set_name,
+                'set_price': set_price,
+                'total_part_price': total_part_price,
+                'arbitrage_value': arbitrage_value,
+                'market_url': f'https://warframe.market/items/{set_name}'
+            })
+            print(f"Found arbitrage opportunity for {set_name}, arbitrage value: {arbitrage_value}\n")
 
-        return lowest_price
+    return opportunities
 
-    # Construct dict of warframe parts with their respective market names
-    def construct_warframes_items(self):
-        warframes_items = {}
-
-        for warframe in self.prime_warframes:
-            warframe_name = warframe['market_name']
-
-            warframe = {
-                'set': warframe_name+'_set',
-                'blueprint': warframe_name+'_blueprint',
-                'systems': warframe_name+'_systems',
-                'neuroptics': warframe_name+'_neuroptics',
-                'chassis': warframe_name+'_chassis'
-            }
-
-            warframes_items[warframe_name] = warframe
-        
-        return warframes_items
-
-    # Construct dict of warframe parts with their respective prices
-    def construct_warframes_prices(self, warframes_items):
-        warframes_prices = {}
-
-        print("Getting prices...")
-
-        count = 0
-        for warframe_name, warframe_parts in warframes_items.items():
-            count += 1
-            warframes_prices[warframe_name] = {}
-
-            for part_type, part_name in warframe_parts.items():
-                while True:
-                    try:
-                        retry_amount = 0
-                        warframes_prices[warframe_name][part_type] = self.get_lowest_price(part_name)
-                        break
-                    except KeyboardInterrupt:
-                        break
-                    except:
-                        retry_amount += 1
-
-                        if retry_amount >= 3:
-                            try: warframes_prices.pop(warframe_name)
-                            except: pass
-
-                            print("Failed to get prices for " + warframe_name)
-                            break
-
-                        time.sleep(1.5)
-                        continue
-            
-            # Warframe progress counter
-            display_name = self.market_name_to_name(warframe_name)
-            print(f"Processed {count}/{len(warframes_items)} warframes ({display_name})"+" "*10, end='\r')
-            time.sleep(.5)
-            # break
-
-        print('\n')
-        return warframes_prices
-    
-    # Construct dict of warframes with their respective arbitrage
-    def construct_warframes_arbitrage(self, warframes_prices):
-        warframes_arbitrage = {}
-
-        for warframe_name, warframe_prices in warframes_prices.items():
-            warframes_arbitrage[warframe_name] = {}
-            total_parts_price = 0
-
-            # Get part prices
-            for part_type, part_price in warframe_prices.items():
-                if part_type != 'set':
-                    total_parts_price += part_price
-            
-            # Check if part prices are greater than set price or not
-            if total_parts_price >= warframe_prices['set']:
-                warframes_arbitrage[warframe_name]['arbitrage'] = total_parts_price - warframe_prices['set']
-            else:
-                warframes_arbitrage[warframe_name]['arbitrage'] = warframe_prices['set'] - total_parts_price
-
-            # Set arbitrage data
-            warframes_arbitrage[warframe_name]['parts_price'] = total_parts_price
-            warframes_arbitrage[warframe_name]['set_price'] = warframe_prices['set']
-            warframes_arbitrage[warframe_name]['market_url'] = self.market_url + warframe_name
-            warframes_arbitrage[warframe_name]['display_name'] = self.market_name_to_name(warframe_name)
-        
-        # Remove warframes with arbitrage less than min_arbitrage
-        warframes_arbitrage = self.filter_arbitrage(warframes_arbitrage)
-
-        return warframes_arbitrage
-
-# Run app
 def main():
-    prime_warframes = load_prime_warframes()
-    scraper = Scraper(
-        prime_warframes,
-        min_arbitrage=load_config()['min_arbitrage'],
-    )
+    items = fetch_all_items()
+    sets = find_eligible_sets(items)
+    opportunities = find_arbitrage_opportunities(sets, items)
 
-    results = scraper.run()
-    print_table(results)
+    opportunities.sort(key=lambda o: o['arbitrage_value'], reverse=True)
 
-if __name__ == '__main__':
+    for opportunity in opportunities:
+        print(json.dumps(opportunity, indent=4))
+
+if __name__ == "__main__":
     main()
