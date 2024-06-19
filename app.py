@@ -24,7 +24,7 @@ def fetch_item_price(item_name):
         return None
     # if the error is a rate limit error, wait for a few seconds and try again
     if response.status_code != 200:
-        print("Rate limited. Waiting for 1 seconds...")
+        print("Rate limited. Waiting for 1 second...")
         time.sleep(1)
         return fetch_item_price(item_name)
     orders = response.json()['payload']['orders']
@@ -55,7 +55,7 @@ def find_arbitrage_opportunities(sets, all_items):
         part_prices = []
         for part_name in part_names:
             price = fetch_item_price(part_name)
-            time.sleep(0.1)
+            time.sleep(0.2)
             if price is None:
                 part_prices = [None]
                 break
