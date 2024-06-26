@@ -19,7 +19,17 @@ def find_related_parts(set_name, all_items):
 
 def get_set_info(set_name):
     response = requests.get(f'https://api.warframe.market/v1/items/{set_name}')
-    return response.json()['payload']['item']
+    if response.status_code == 404:
+        return None
+    if response.status_code != 200:
+        print("Rate limited. Waiting for 1 second...")
+        time.sleep(1)
+        return get_set_info(set_name)
+
+    try:
+        return response.json()['payload']['item']
+    except KeyError:
+        return None
 
 def extract_quantity_from_item(item_name, set_info):
     if item_name.endswith('_set'):
@@ -103,7 +113,7 @@ def find_arbitrage_opportunities(sets, all_items):
         set_info = get_set_info(set_name)
 
         set_price = fetch_set_price(set_name)
-        if set_price is None:
+        if (set_info is None) or (set_price is None):
             continue
 
         print(f"Checking arbitrage opportunities for {set_name}...")
