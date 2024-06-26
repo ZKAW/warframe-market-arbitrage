@@ -86,7 +86,7 @@ def fetch_part_prices(set_name, set_info, all_items):
     part_prices = []
     for part_name in part_names:
         item = fetch_item_details(part_name, set_info)
-        time.sleep(0.2)
+        time.sleep(0.3)
         if item is None or not item:
             part_prices = [None]
             break
