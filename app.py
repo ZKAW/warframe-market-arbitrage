@@ -140,7 +140,8 @@ def find_arbitrage_opportunities(sets, all_items):
         if set_volume is None or set_volume < MIN_VOLUME:
             print(f"Volume for {set_name} is too low", end="")
             if set_volume is not None:
-                print(f" (was {set_volume}, required {MIN_VOLUME}). Skipping...")
+                print(f" (was {set_volume}, required {MIN_VOLUME}). Skipping...", end="")
+            print()
             continue
         set_info = get_set_info(set_name)
 
