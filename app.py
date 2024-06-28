@@ -166,6 +166,7 @@ def find_arbitrage_opportunities(sets, all_items):
                 'set_price': set_price,
                 'total_part_price': total_part_price,
                 'arbitrage_value': arbitrage_value,
+                'volume': set_volume,
                 'market_url': f'https://warframe.market/items/{set_name}'
             })
             print(f"Found arbitrage opportunity for {set_name}, arbitrage value: {arbitrage_value}\n")
