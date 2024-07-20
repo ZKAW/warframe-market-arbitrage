@@ -1,6 +1,19 @@
-import requests
 import time
 import json
+import requests
+import asyncio
+import uvicorn
+
+from fastapi import FastAPI
+from datetime import datetime, timezone
+from contextlib import asynccontextmanager
+from threading import Thread
+from datetime import datetime, timezone
+
+app = FastAPI()
+
+# Global in-memory storage for arbitrage opportunities
+arbitrage_data = {}
 
 def read_config():
     if not hasattr(read_config, "_config_data"):
@@ -20,7 +33,7 @@ def safe_get_request(url, params=None, retries=5):
         return None
 
     delay = read_config()['RATE_LIMIT_DELAY']
-    print("Rate limited. Waiting for {delay} seconds...")
+    print(f"Rate limited. Waiting for {delay} seconds...")
     time.sleep(delay)
     return safe_get_request(url, params, retries - 1)
 
@@ -130,7 +143,7 @@ def fetch_part_prices(set_name, set_info, all_items):
     return part_prices
 
 def find_arbitrage_opportunities(sets, all_items):
-    opportunities = []
+    global arbitrage_data
     MIN_ARBITRAGE_VALUE = read_config()['MIN_ARBITRAGE_VALUE']
     MIN_VOLUME = read_config()['MIN_VOLUME']
 
@@ -162,27 +175,49 @@ def find_arbitrage_opportunities(sets, all_items):
         arbitrage_value = set_price - total_part_price
 
         if arbitrage_value > MIN_ARBITRAGE_VALUE:
-            opportunities.append({
+            opportunity = {
                 'set': set_name,
                 'set_price': set_price,
                 'total_part_price': total_part_price,
                 'arbitrage_value': arbitrage_value,
                 'volume': set_volume,
-                'market_url': f'https://warframe.market/items/{set_name}'
-            })
+                'market_url': f'https://warframe.market/items/{set_name}',
+                'last_updated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            }
+            arbitrage_data[set_name] = opportunity
             print(f"Found arbitrage opportunity for {set_name}, arbitrage value: {arbitrage_value}\n")
 
-    return opportunities
+async def fetch_and_update_arbitrage_data_async():
+    while True:
+        items = fetch_all_items()
+        if items is None:
+            continue
 
-def main():
-    items = fetch_all_items()
-    sets = find_eligible_sets(items)
-    opportunities = find_arbitrage_opportunities(sets, items)
+        sets = find_eligible_sets(items)
+        find_arbitrage_opportunities(sets, items)
 
-    opportunities.sort(key=lambda o: o['arbitrage_value'], reverse=True)
+        await asyncio.sleep(read_config()['RETRY_INTERVAL'])  # Use asyncio.sleep for async sleep
 
-    for opportunity in opportunities:
-        print(json.dumps(opportunity, indent=4))
+def start_background_task():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(fetch_and_update_arbitrage_data_async())
+
+@app.get("/")
+@app.post("/")
+async def get_arbitrage_opportunities():
+    sorted_data = sorted(arbitrage_data.values(), key=lambda x: x['arbitrage_value'], reverse=True)
+    return sorted_data
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = Thread(target=start_background_task)
+    task.start()
+    yield
+    task.join()
+
+app.router.lifespan_context = lifespan
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
