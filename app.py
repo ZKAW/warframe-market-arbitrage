@@ -177,9 +177,9 @@ def find_arbitrage_opportunities(sets, all_items):
         if arbitrage_value > MIN_ARBITRAGE_VALUE:
             opportunity = {
                 'set': set_name,
+                'arbitrage_value': arbitrage_value,
                 'set_price': set_price,
                 'total_part_price': total_part_price,
-                'arbitrage_value': arbitrage_value,
                 'volume': set_volume,
                 'market_url': f'https://warframe.market/items/{set_name}',
                 'last_updated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
