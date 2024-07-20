@@ -12,3 +12,5 @@ pip3 install -r requirements.txt
 ```bash
 python3 app.py
 ```
+
+Then go to `http://localhost:3000/`
