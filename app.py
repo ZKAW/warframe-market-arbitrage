@@ -98,8 +98,8 @@ def fetch_item_details(item_name, set_info=None):
     prices = [
         order['platinum'] for order in orders
         if order['order_type'] == 'sell'
-        and order['region'] == 'en'
-        and order['platform'] == 'pc'
+        and order['user']['region'] == 'en'
+        and order['user']['platform'] == 'pc'
         and order['user']['status'] == 'ingame'
     ]
 
