@@ -3,17 +3,20 @@ import json
 import requests
 import asyncio
 import uvicorn
+import signal
 
 from fastapi import FastAPI
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from threading import Thread
+from threading import Thread, Event
 from datetime import datetime, timezone
 
 app = FastAPI()
 
 # Global in-memory storage for arbitrage opportunities
 arbitrage_data = {}
+# Event to signal the background thread to stop
+shutdown_event = Event()
 
 def read_config():
     if not hasattr(read_config, "_config_data"):
@@ -148,6 +151,9 @@ def find_arbitrage_opportunities(sets, all_items):
     MIN_VOLUME = read_config()['MIN_VOLUME']
 
     for set_item in sets:
+        if shutdown_event.is_set():
+            return
+
         set_name = set_item['url_name']
         set_volume = get_volume(set_name)
         if set_volume is None or set_volume < MIN_VOLUME:
@@ -188,20 +194,30 @@ def find_arbitrage_opportunities(sets, all_items):
             print(f"Found arbitrage opportunity for {set_name}, arbitrage value: {arbitrage_value}\n")
 
 async def fetch_and_update_arbitrage_data_async():
-    while True:
-        items = fetch_all_items()
-        if items is None:
-            continue
+    while not shutdown_event.is_set():
+        try:
+            items = fetch_all_items()
+            if items is None:
+                continue
 
-        sets = find_eligible_sets(items)
-        find_arbitrage_opportunities(sets, items)
+            sets = find_eligible_sets(items)
+            find_arbitrage_opportunities(sets, items)
 
-        await asyncio.sleep(read_config()['RETRY_INTERVAL'])  # Use asyncio.sleep for async sleep
+            for _ in range(int(read_config()['RETRY_INTERVAL'])):
+                if shutdown_event.is_set():
+                    break
+                await asyncio.sleep(1)
+        except Exception as e:
+            print(f"Error in background task: {e}")
+            await asyncio.sleep(10)
 
 def start_background_task():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(fetch_and_update_arbitrage_data_async())
+    try:
+        loop.run_until_complete(fetch_and_update_arbitrage_data_async())
+    finally:
+        loop.close()
 
 @app.get("/")
 @app.post("/")
@@ -209,15 +225,30 @@ async def get_arbitrage_opportunities():
     sorted_data = sorted(arbitrage_data.values(), key=lambda x: x['arbitrage_value'], reverse=True)
     return sorted_data
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = Thread(target=start_background_task)
-    task.start()
+    background_thread = Thread(target=start_background_task, daemon=True)
+    background_thread.start()
     yield
-    task.join()
+    print("Shutting down background task... Exiting in 3 seconds.")
+    shutdown_event.set()
+    background_thread.join(timeout=3)
+    if background_thread.is_alive():
+        print("Background thread did not terminate gracefully within timeout.")
+    else:
+        print("Background thread shutdown successfully.")
 
 app.router.lifespan_context = lifespan
 
+def signal_handler(sig, frame):
+    print(f"Received signal {sig}, initiating shutdown...")
+    shutdown_event.set()
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(read_config()['PORT']))
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    config = read_config()
+    port = int(config.get('PORT', 8000))
+    print(f"Starting server on port {port}...")
+    uvicorn.run(app, host="0.0.0.0", port=port)
