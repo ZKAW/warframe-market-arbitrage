@@ -1,44 +1,25 @@
-import time
 import json
-import requests
 import asyncio
+import httpx
 import uvicorn
-import signal
 
 from fastapi import FastAPI
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from threading import Thread, Event
-from datetime import datetime, timezone
+
+API_BASE = "https://api.warframe.market/v2"
 
 app = FastAPI()
 
-# Global in-memory storage for arbitrage opportunities
 arbitrage_data = {}
-# Event to signal the background thread to stop
-shutdown_event = Event()
+shutdown_event = asyncio.Event()
+http_client: httpx.AsyncClient | None = None
 
 def read_config():
     if not hasattr(read_config, "_config_data"):
         with open('config.json') as f:
             read_config._config_data = json.load(f)
     return read_config._config_data
-
-def safe_get_request(url, params=None, retries=5):
-    response = requests.get(url, params=params)
-    time.sleep(read_config()['REQUEST_DELAY'])
-    if response.status_code == 200:
-        return response
-    if response.status_code == 404:
-        return None
-    if retries == 0:
-        print(f"Retries exhausted for {url}. Skipping...")
-        return None
-
-    delay = read_config()['RATE_LIMIT_DELAY']
-    print(f"Rate limited. Waiting for {delay} seconds...")
-    time.sleep(delay)
-    return safe_get_request(url, params, retries - 1)
 
 def safe_get_keys(data, *keys, default=None):
     try:
@@ -48,207 +29,185 @@ def safe_get_keys(data, *keys, default=None):
     except (KeyError, IndexError, TypeError):
         return default
 
-def fetch_all_items():
-    response = safe_get_request('https://api.warframe.market/v1/items')
-    if response is None:
-        return None
+async def safe_get_request(url, params=None, retries=5):
+    config = read_config()
+    delay = config.get('REQUEST_DELAY', 0.35)
+    rl_delay = config.get('RATE_LIMIT_DELAY', 10)
 
-    return safe_get_keys(response.json(), 'payload', 'items')
-
-def find_eligible_sets(items):
-    return [item for item in items if item['url_name'].endswith('_set')]
-
-def find_related_parts(set_name, all_items):
-    base_name = set_name.replace('_set', '')
-    return [item['url_name'] for item in all_items if item['url_name'].startswith(base_name) and not item['url_name'].endswith('_set')]
-
-def get_volume(item_name):
-    response = safe_get_request(f'https://api.warframe.market/v1/items/{item_name}/statistics')
-    if response is None:
-        return None
-
-    return safe_get_keys(response.json(), 'payload', 'statistics_closed', '48hours', -1, 'volume')
-
-def get_set_info(set_name):
-    response = safe_get_request(f'https://api.warframe.market/v1/items/{set_name}')
-    if response is None:
-        return None
-
-    return safe_get_keys(response.json(), 'payload', 'item')
-
-def extract_quantity_from_item(item_name, set_info):
-    if item_name.endswith('_set'):
-        return 1
-    for component in set_info['items_in_set']:
-        if component['url_name'] == item_name:
-            try:
-                return int(component['quantity_for_set'])
-            except (ValueError, KeyError):
-                return 1
-
-    return 1
-
-def fetch_item_details(item_name, set_info=None):
-    quantity = 1
-    response = safe_get_request(f'https://api.warframe.market/v1/items/{item_name}/orders')
-    if response is None:
-        return None
-
-    orders = safe_get_keys(response.json(), 'payload', 'orders')
-    if orders is None:
-        return None
-
-    prices = [
-        order['platinum'] for order in orders
-        if order['order_type'] == 'sell'
-        and order['user']['region'] == 'en'
-        and order['user']['platform'] == 'pc'
-        and order['user']['status'] == 'ingame'
-    ]
-
-    if set_info:
-        quantity = extract_quantity_from_item(item_name, set_info)
-
-    price = min(prices) if prices else None
-
-    if price is None:
-        return None
-
-    return {
-        'price': price,
-        'quantity': quantity
+    headers = {
+        "Language": "en",
+        "Platform": "pc",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0"
     }
 
-def fetch_set_price(set_name):
-    set_data = fetch_item_details(set_name)
-
-    if set_data is None or not set_data['price']:
-        return None
-
-    try:
-        set_price = set_data['price']
-    except (KeyError, IndexError):
-        print(f"Failed to fetch price for {set_name}. Skipping...")
-        return None
-
-    return set_price
-
-def fetch_part_prices(set_name, set_info, all_items):
-    part_names = find_related_parts(set_name, all_items)
-    part_prices = []
-    for part_name in part_names:
-        item = fetch_item_details(part_name, set_info)
-        if item is None or not item:
-            part_prices = [None]
-            break
-        part_prices.append(item['price'] * item['quantity'])
-
-    return part_prices
-
-def find_arbitrage_opportunities(sets, all_items):
-    global arbitrage_data
-    MIN_ARBITRAGE_VALUE = read_config()['MIN_ARBITRAGE_VALUE']
-    MIN_VOLUME = read_config()['MIN_VOLUME']
-
-    for set_item in sets:
-        if shutdown_event.is_set():
-            return
-
-        set_name = set_item['url_name']
-        set_volume = get_volume(set_name)
-        if set_volume is None or set_volume < MIN_VOLUME:
-            print(f"Volume for {set_name} is too low", end="")
-            if set_volume is not None:
-                print(f" (was {set_volume}, required {MIN_VOLUME}). Skipping...", end="")
-            print()
-            continue
-        set_info = get_set_info(set_name)
-
-        set_price = fetch_set_price(set_name)
-        if (set_info is None) or (set_price is None):
-            continue
-
-        print(f"Checking arbitrage opportunities for {set_name}...")
-        part_prices = fetch_part_prices(set_name, set_info, all_items)
-
-        if None in part_prices:
-            print(f"Failed to fetch prices for {set_name}. Skipping...")
-            continue
-
-        total_part_price = sum(part_prices)
-        if total_part_price == 0:
-            continue
-        arbitrage_value = set_price - total_part_price
-
-        if arbitrage_value > MIN_ARBITRAGE_VALUE:
-            opportunity = {
-                'set': set_name,
-                'arbitrage_value': arbitrage_value,
-                'set_price': set_price,
-                'total_part_price': total_part_price,
-                'volume': set_volume,
-                'market_url': f'https://warframe.market/items/{set_name}',
-                'last_updated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-            }
-            arbitrage_data[set_name] = opportunity
-            print(f"Found arbitrage opportunity for {set_name}, arbitrage value: {arbitrage_value}\n")
-
-async def fetch_and_update_arbitrage_data_async():
-    while not shutdown_event.is_set():
+    for attempt in range(retries + 1):
         try:
-            items = fetch_all_items()
-            if items is None:
+            if http_client is None: return None
+            response = await http_client.get(url, params=params, headers=headers)
+
+            if response.status_code == 200:
+                await asyncio.sleep(delay)
+                return response
+
+            if response.status_code == 404:
+                return None
+
+            if response.status_code == 429:
+                print(f"Rate limited (429). Waiting {rl_delay}s...")
+                await asyncio.sleep(rl_delay)
                 continue
 
-            sets = find_eligible_sets(items)
-            find_arbitrage_opportunities(sets, items)
+        except httpx.RequestError as e:
+            print(f"Request error: {e}")
+            await asyncio.sleep(2)
 
-            for _ in range(int(read_config()['RETRY_INTERVAL'])):
-                if shutdown_event.is_set():
-                    break
-                await asyncio.sleep(1)
+    return None
+
+async def fetch_all_items():
+    response = await safe_get_request(f"{API_BASE}/items")
+    if response is None:
+        return None
+    return safe_get_keys(response.json(), 'data')
+
+async def fetch_price_data(item_slug):
+    """
+    Fetches orders and filters for 'sell', 'visible', and 'ingame'.
+    V2 structure: uses 'type' instead of 'order_type'.
+    """
+    response = await safe_get_request(f"{API_BASE}/orders/item/{item_slug}")
+    if response is None:
+        return None
+
+    orders = safe_get_keys(response.json(), 'data', default=[])
+
+    valid_prices = [
+        order['platinum']
+        for order in orders
+        if order.get('type') == 'sell'
+        and order.get('visible') is True
+        and safe_get_keys(order, 'user', 'status') == 'ingame'
+    ]
+
+    return min(valid_prices) if valid_prices else None
+
+async def get_item_details(item_slug):
+    response = await safe_get_request(f"{API_BASE}/item/{item_slug}")
+    if response is None:
+        return None
+    return safe_get_keys(response.json(), 'data')
+
+async def get_item_specs(item_slug):
+    response = await get_item_details(item_slug)
+    if response is None:
+        return None
+    # return slug and quantity in set
+    quantity = safe_get_keys(response, 'quantityInSet', default=1)
+    slug = safe_get_keys(response, 'slug')
+
+    return {"slug": slug, "quantity": quantity}
+
+async def get_components(manifest):
+    set_parts = safe_get_keys(manifest, 'setParts', default=[])
+    components = []
+    for uid in set_parts:
+        specs = await get_item_specs(uid)
+        if not specs:
+            break
+        components.append(specs)
+    return components
+
+async def process_single_set(set_slug):
+    config = read_config()
+
+    response = await safe_get_request(f"{API_BASE}/items/{set_slug}")
+    if not response:
+        return
+
+    manifest = response.json().get('data', {})
+    components = await get_components(manifest)
+
+    if not components:
+        return
+
+    set_price = None
+    total_parts_cost = 0
+
+    for item in components:
+        slug = item["slug"]
+        quantity = item.get("quantity", 1)
+
+        if slug == set_slug:
+            set_price = await fetch_price_data(slug)
+        else:
+            price = await fetch_price_data(slug)
+            if price is None:
+                return
+            total_parts_cost += price * quantity
+
+    if not set_price:
+        return
+
+    arbitrage_value = set_price - total_parts_cost
+
+    if arbitrage_value >= config.get('MIN_ARBITRAGE_VALUE', 10):
+        arbitrage_data[set_slug] = {
+            'set': set_slug,
+            'arbitrage_value': arbitrage_value,
+            'set_price': set_price,
+            'total_part_price': total_parts_cost,
+            'market_url': f'https://warframe.market/items/{set_slug}',
+            'last_updated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        }
+        print(f"Profit Found: {set_slug} (+{arbitrage_value}p)")
+
+async def fetch_and_update_arbitrage_data():
+    config = read_config()
+    while not shutdown_event.is_set():
+        try:
+            print(f"Cycle started: {datetime.now().strftime('%H:%M:%S')}")
+            items = await fetch_all_items()
+            print(f"Fetched {len(items) if items else 0} items")
+            if items:
+                sets = [i for i in items if i['slug'].endswith('_set')]
+                for set_item in sets:
+                    if shutdown_event.is_set(): break
+                    await process_single_set(set_item['slug'])
+
+            print("Cycle complete. Waiting for next interval...")
         except Exception as e:
-            print(f"Error in background task: {e}")
-            await asyncio.sleep(10)
+            print(f"Loop error: {e}")
 
-def start_background_task():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(fetch_and_update_arbitrage_data_async())
-    finally:
-        loop.close()
+        for _ in range(int(config.get('RETRY_INTERVAL', 600))):
+            if shutdown_event.is_set(): break
+            await asyncio.sleep(1)
 
 @app.get("/")
 @app.post("/")
 async def get_arbitrage_opportunities():
-    sorted_data = sorted(arbitrage_data.values(), key=lambda x: x['arbitrage_value'], reverse=True)
-    return sorted_data
+    return sorted(
+        arbitrage_data.values(),
+        key=lambda x: x['arbitrage_value'],
+        reverse=True
+    )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    background_thread = Thread(target=start_background_task, daemon=True)
-    background_thread.start()
+    global http_client
+    http_client = httpx.AsyncClient(timeout=30.0)
+    background_task = asyncio.create_task(fetch_and_update_arbitrage_data())
     yield
-    print("Shutting down background task... Exiting in 3 seconds.")
     shutdown_event.set()
-    background_thread.join(timeout=3)
-    if background_thread.is_alive():
-        print("Background thread did not terminate gracefully within timeout.")
-    else:
-        print("Background thread shutdown successfully.")
+    background_task.cancel()
+    try:
+        await background_task
+    except asyncio.CancelledError:
+        pass
+    await http_client.aclose()
 
 app.router.lifespan_context = lifespan
 
-def signal_handler(sig, frame):
-    print(f"Received signal {sig}, initiating shutdown...")
-    shutdown_event.set()
-
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
     config = read_config()
     port = int(config.get('PORT', 8000))
-    print(f"Starting server on port {port}...")
     uvicorn.run(app, host="0.0.0.0", port=port)
