@@ -108,30 +108,46 @@ async def get_item_specs(item_slug):
     return {"slug": slug, "quantity": quantity}
 
 async def get_components(manifest):
+    """
+    Returns the full list of component specs for a set, or None if ANY
+    component lookup fails. Previously this returned a partial list on
+    failure, which let arbitrage be computed off incomplete part data
+    (silently undercounting total_parts_cost -> false positives).
+    """
     set_parts = safe_get_keys(manifest, 'setParts', default=[])
     components = []
     for uid in set_parts:
         specs = await get_item_specs(uid)
         if not specs:
-            break
+            return None
         components.append(specs)
     return components
 
 async def process_single_set(set_slug):
+    """
+    Refreshes a single set's arbitrage entry. Crucially, this function is
+    now responsible for REMOVING the entry from arbitrage_data whenever the
+    set no longer qualifies (missing data, no live sell orders, or
+    arbitrage value has dropped below threshold) rather than leaving stale
+    data behind.
+    """
     config = read_config()
 
     response = await safe_get_request(f"{API_BASE}/items/{set_slug}")
     if not response:
+        arbitrage_data.pop(set_slug, None)
         return
 
     manifest = response.json().get('data', {})
     components = await get_components(manifest)
 
     if not components:
+        arbitrage_data.pop(set_slug, None)
         return
 
     set_price = None
     total_parts_cost = 0
+    data_incomplete = False
 
     for item in components:
         slug = item["slug"]
@@ -142,10 +158,12 @@ async def process_single_set(set_slug):
         else:
             price = await fetch_price_data(slug)
             if price is None:
-                return
+                data_incomplete = True
+                break
             total_parts_cost += price * quantity
 
-    if not set_price:
+    if data_incomplete or not set_price:
+        arbitrage_data.pop(set_slug, None)
         return
 
     arbitrage_value = set_price - total_parts_cost
@@ -160,6 +178,21 @@ async def process_single_set(set_slug):
             'last_updated': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         }
         print(f"Profit Found: {set_slug} (+{arbitrage_value}p)")
+    else:
+        # No longer profitable enough - remove any stale entry from a
+        # previous cycle instead of leaving it behind.
+        if arbitrage_data.pop(set_slug, None) is not None:
+            print(f"No longer profitable, removed: {set_slug}")
+
+def prune_delisted_sets(current_set_slugs):
+    """
+    Removes any tracked set that no longer appears in the live '_set'
+    listing at all (renamed, delisted, vaulted-and-removed, etc).
+    """
+    stale_slugs = set(arbitrage_data.keys()) - current_set_slugs
+    for slug in stale_slugs:
+        arbitrage_data.pop(slug, None)
+        print(f"Removed delisted/renamed set: {slug}")
 
 async def fetch_and_update_arbitrage_data():
     config = read_config()
@@ -168,11 +201,29 @@ async def fetch_and_update_arbitrage_data():
             print(f"Cycle started: {datetime.now().strftime('%H:%M:%S')}")
             items = await fetch_all_items()
             print(f"Fetched {len(items) if items else 0} items")
+
             if items:
-                sets = [i for i in items if i['slug'].endswith('_set')]
+                sets = [i for i in items if i.get('slug', '').endswith('_set')]
+                current_set_slugs = {s['slug'] for s in sets}
+
+                # Only prune "no longer exists" entries when we actually
+                # got a fresh, live listing. A transient fetch failure
+                # (items is None/empty) must NOT be treated as "everything
+                # got delisted".
+                prune_delisted_sets(current_set_slugs)
+
                 for set_item in sets:
-                    if shutdown_event.is_set(): break
-                    await process_single_set(set_item['slug'])
+                    if shutdown_event.is_set():
+                        break
+                    try:
+                        await process_single_set(set_item['slug'])
+                    except Exception as e:
+                        # Don't let one bad set abort the whole cycle and
+                        # leave the rest of the data unrefreshed.
+                        print(f"Error processing {set_item.get('slug', '?')}: {e}")
+            else:
+                print("No items fetched this cycle (transient failure); "
+                      "keeping existing data, skipping prune.")
 
             print("Cycle complete. Waiting for next interval...")
         except Exception as e:
@@ -182,14 +233,32 @@ async def fetch_and_update_arbitrage_data():
             if shutdown_event.is_set(): break
             await asyncio.sleep(1)
 
+def is_data_fresh(entry, max_age_seconds):
+    """
+    Safety net: even if the background loop stalls or a cycle takes far
+    longer than expected, don't serve arbitrarily old data out of the API.
+    """
+    try:
+        updated = datetime.strptime(
+            entry['last_updated'], '%Y-%m-%d %H:%M:%S'
+        ).replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - updated).total_seconds()
+        return age <= max_age_seconds
+    except Exception:
+        return False
+
 @app.get("/")
 @app.post("/")
 async def get_arbitrage_opportunities():
-    return sorted(
-        arbitrage_data.values(),
-        key=lambda x: x['arbitrage_value'],
-        reverse=True
-    )
+    config = read_config()
+    max_age = config.get('MAX_DATA_AGE_SECONDS', 1800)  # 30 min default
+
+    fresh_data = [
+        entry for entry in arbitrage_data.values()
+        if is_data_fresh(entry, max_age)
+    ]
+
+    return sorted(fresh_data, key=lambda x: x['arbitrage_value'], reverse=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
