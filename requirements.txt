@@ -1,4 +1,0 @@
-tabulate
-fastapi
-uvicorn
-httpx

@@ -1,21 +1,26 @@
-# Warframe Market arbitrage Bot
+# Warframe Market Terminal
 
-## Introduction
-This is a bot that will calculate price difference between set price and parts price on [warframe.market](https://warframe.market/) And also calculate ducat to platinum ratio for items that can be sold for ducats.
+## Setup
 
-## How to install
 ```bash
-pip3 install -r requirements.txt
+bun install
+bun dev
 ```
 
-## For platinium arbitration
-```bash
-python3 platinium.py
-```
+Open http://localhost:3000. The first full scrape can take a few
+minutes depending on how much of the market it has to walk (each item
+request is deliberately rate-limited); the UI shows a "first scrape is
+still running" state until then.
 
-## For best ducat arbitration
-```bash
-python3 scripts/ducats.py
-```
+## Tuning
 
-Then go to `http://localhost:3000/`
+Optional - copy `.env.local.example` to `.env.local` to adjust scrape
+interval, rate-limit backoff, and the profit/ratio thresholds for each
+tab.
+
+## Production
+
+```bash
+bun run build
+bun start
+```
