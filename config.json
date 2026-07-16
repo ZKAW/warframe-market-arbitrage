@@ -1,5 +1,5 @@
 {
-    "PORT": 3000,
+    "PORT": 3001,
     "MIN_ARBITRAGE_VALUE": 15,
     "REQUEST_DELAY": 0.5,
     "RATE_LIMIT_DELAY": 1,
