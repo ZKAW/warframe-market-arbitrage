@@ -29,6 +29,10 @@ interface DataTableProps<T> {
   // Silently restrict rows to those whose `tags` include this value. Used to
   // lock ducats to prime items without rendering any filter UI.
   fixedTag?: string;
+  // Column key whose render/value becomes the card title on mobile.
+  cardPrimary: string;
+  // Column key whose render/value becomes the highlighted metric on mobile.
+  cardHighlight: string;
 }
 
 const SORT_ICON_PROPS = {
@@ -51,7 +55,6 @@ function nextSort(stack: SortEntry[], key: string): SortEntry[] {
   }
   return stack.filter((e) => e.key !== key);
 }
-
 export default function DataTable<T extends { set?: string; item?: string; tags?: string[] }>({
   columns,
   rows,
@@ -60,6 +63,8 @@ export default function DataTable<T extends { set?: string; item?: string; tags?
   defaultSortDir = 'desc',
   enableTagFilter = false,
   fixedTag,
+  cardPrimary,
+  cardHighlight,
 }: DataTableProps<T>) {
   const defaultStack = useMemo<SortEntry[]>(
     () => (defaultSortKey ? [{ key: defaultSortKey, dir: defaultSortDir }] : []),
@@ -181,6 +186,58 @@ export default function DataTable<T extends { set?: string; item?: string; tags?
 
   const showRanks = sortStack.length > 1;
 
+  const renderCell = (col: Column<T>, row: T): ReactNode =>
+    col.render
+      ? col.render(row)
+      : ((row as Record<string, unknown>)[col.key] as ReactNode);
+
+  const primaryCol = columns.find((c) => c.key === cardPrimary);
+  const highlightCol = columns.find((c) => c.key === cardHighlight);
+  const detailCols = columns.filter(
+    (c) => c.key !== cardPrimary && c.key !== cardHighlight,
+  );
+  // Order for the mobile sort bar: name first, then the highlighted metric,
+  // then the remaining fields — matching the desktop header left-to-right.
+  const cardSortCols = [primaryCol, highlightCol, ...detailCols].filter(
+    (c): c is Column<T> => Boolean(c),
+  );
+
+  const sortInfo = (key: string) => {
+    const rank = sortStack.findIndex((e) => e.key === key);
+    return { dir: rank >= 0 ? sortStack[rank].dir : undefined, rank };
+  };
+
+  // Sort affordance for a mobile card field. Mirrors a desktop <th>: tappable
+  // to cycle the column's sort direction, showing the current direction icon
+  // and a rank badge when several columns are stacked.
+  const cardSortButton = (col: Column<T>): ReactNode => {
+    const { dir, rank } = sortInfo(col.key);
+    return (
+      <button
+        type="button"
+        className="card-sort"
+        aria-pressed={dir ? 'true' : 'false'}
+        aria-sort={dir ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+        aria-label={`Sort by ${col.label}`}
+        onClick={() => handleSort(col.key)}
+        onKeyDown={handleKeyDown(col.key)}
+      >
+        <span className="card-sort-label">{col.label}</span>
+        {dir === 'asc' ? (
+          <ArrowUp {...SORT_ICON_PROPS} />
+        ) : dir === 'desc' ? (
+          <ArrowDown {...SORT_ICON_PROPS} />
+        ) : (
+          <ArrowUpDown {...SORT_ICON_PROPS} />
+        )}
+        {showRanks && rank >= 0 && (
+          <span className="sort-rank" aria-hidden="true">
+            {rank + 1}
+          </span>
+        )}
+      </button>
+    );
+  };
   return (
     <div className="table-wrap">
       {allTags.length > 0 && (
@@ -237,59 +294,91 @@ export default function DataTable<T extends { set?: string; item?: string; tags?
           )}
         </div>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              {columns.map((col) => {
-                const rank = sortStack.findIndex((e) => e.key === col.key);
-                const dir = rank >= 0 ? sortStack[rank].dir : undefined;
-                return (
-                  <th
-                    key={col.key}
-                    className={col.align === 'right' ? 'num sortable' : 'sortable'}
-                    data-sort={dir ?? 'none'}
-                    data-sort-rank={rank >= 0 ? rank + 1 : undefined}
-                    tabIndex={0}
-                    aria-sort={
-                      dir ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'
-                    }
-                    onClick={() => handleSort(col.key)}
-                    onKeyDown={handleKeyDown(col.key)}
-                  >
-                    <span className="th-label">
-                      {col.label}
-                      {dir === 'asc' ? (
-                        <ArrowUp {...SORT_ICON_PROPS} />
-                      ) : dir === 'desc' ? (
-                        <ArrowDown {...SORT_ICON_PROPS} />
-                      ) : (
-                        <ArrowUpDown {...SORT_ICON_PROPS} />
-                      )}
-                      {showRanks && rank >= 0 && (
-                        <span className="sort-rank" aria-hidden="true">
-                          {rank + 1}
-                        </span>
-                      )}
-                    </span>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {filteredRows.map((row, i) => (
-              <tr key={row.set || row.item || i}>
-                {columns.map((col) => (
-                  <td key={col.key} className={col.align === 'right' ? 'num' : ''}>
-                    {col.render
-                      ? col.render(row)
-                      : ((row as Record<string, unknown>)[col.key] as ReactNode)}
-                  </td>
-                ))}
+        <>
+          <table className="data-table">
+            <thead>
+              <tr>
+                {columns.map((col) => {
+                  const rank = sortStack.findIndex((e) => e.key === col.key);
+                  const dir = rank >= 0 ? sortStack[rank].dir : undefined;
+                  return (
+                    <th
+                      key={col.key}
+                      className={col.align === 'right' ? 'num sortable' : 'sortable'}
+                      data-sort={dir ?? 'none'}
+                      data-sort-rank={rank >= 0 ? rank + 1 : undefined}
+                      tabIndex={0}
+                      aria-sort={
+                        dir ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'
+                      }
+                      onClick={() => handleSort(col.key)}
+                      onKeyDown={handleKeyDown(col.key)}
+                    >
+                      <span className="th-label">
+                        {col.label}
+                        {dir === 'asc' ? (
+                          <ArrowUp {...SORT_ICON_PROPS} />
+                        ) : dir === 'desc' ? (
+                          <ArrowDown {...SORT_ICON_PROPS} />
+                        ) : (
+                          <ArrowUpDown {...SORT_ICON_PROPS} />
+                        )}
+                        {showRanks && rank >= 0 && (
+                          <span className="sort-rank" aria-hidden="true">
+                            {rank + 1}
+                          </span>
+                        )}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
+            </thead>
+            <tbody>
+              {filteredRows.map((row, i) => (
+                <tr key={row.set || row.item || i}>
+                  {columns.map((col) => (
+                    <td key={col.key} className={col.align === 'right' ? 'num' : ''}>
+                      {renderCell(col, row)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <ul className="card-list" aria-label="Data rows">
+            <li className="card-sort-bar" aria-label="Sort by">
+              {cardSortCols.map((col) => (
+                <span key={col.key}>{cardSortButton(col)}</span>
+              ))}
+            </li>
+            {filteredRows.map((row, i) => (
+              <li className="card" key={row.set || row.item || i}>
+                <div className="card-row">
+                  <div className="card-title">
+                    {primaryCol ? renderCell(primaryCol, row) : null}
+                  </div>
+                  {highlightCol && (
+                    <div className="card-highlight">
+                      <span className="card-highlight-label">{highlightCol.label}</span>
+                      <span className="card-highlight-value">
+                        {renderCell(highlightCol, row)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <dl className="card-meta">
+                  {detailCols.map((col) => (
+                    <div className="card-meta-item" key={col.key}>
+                      <dt>{col.label}</dt>
+                      <dd>{renderCell(col, row)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </li>
             ))}
-          </tbody>
-        </table>
+          </ul>
+        </>
       )}
     </div>
   );

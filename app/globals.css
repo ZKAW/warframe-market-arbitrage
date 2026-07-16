@@ -9,6 +9,10 @@
   --danger: #e0607a;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * {
@@ -21,12 +25,19 @@ body {
   color: var(--text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  /* Prevent iOS rubber-band over-scroll from revealing the body bg mismatch. */
+  overscroll-behavior-y: none;
 }
 
 main {
   max-width: 960px;
   margin: 0 auto;
-  padding: 2.5rem 1.5rem 4rem;
+  min-height: 100dvh;
+  padding:
+    calc(2.5rem + var(--safe-top))
+    calc(1.5rem + var(--safe-right))
+    calc(4rem + var(--safe-bottom))
+    calc(1.5rem + var(--safe-left));
 }
 
 .topbar {
@@ -168,7 +179,19 @@ table a:focus-visible {
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
-  overflow-x: auto;
+}
+
+/* Desktop-first: table visible, card list hidden. The mobile media query
+   below swaps the two so wide rows never force horizontal scroll on phones. */
+.data-table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.card-list {
+  display: none;
 }
 
 .tag-filter {
@@ -286,11 +309,6 @@ table a:focus-visible {
 }
 
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-}
 
 thead th {
   text-align: left;
@@ -403,6 +421,22 @@ table a:hover {
   border-bottom-color: var(--accent-warm);
 }
 
+/* Mobile card title links: same treatment as table links so they don't fall
+   back to the browser default blue/purple. */
+.card-title a {
+  color: var(--text);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+}
+.card-title a:hover {
+  border-bottom-color: var(--accent-warm);
+}
+.card-title a:focus-visible {
+  outline: 2px solid var(--accent-warm);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .empty-state {
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -417,12 +451,196 @@ table a:hover {
   border-color: var(--danger);
 }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   main {
-    padding: 1.75rem 1rem 3rem;
+    padding-top: calc(1.25rem + var(--safe-top));
+    padding-bottom: calc(2.5rem + var(--safe-bottom));
+    padding-left: calc(1rem + var(--safe-left));
+    padding-right: calc(1rem + var(--safe-right));
   }
+
   .topbar {
     flex-direction: column;
     align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .tabs {
+    width: 100%;
+  }
+  .btn-tab {
+    flex: 1;
+    min-height: 44px;
+    padding: 0.75rem 0.5rem;
+    font-size: 0.95rem;
+  }
+
+  .btn-ghost {
+    min-height: 40px;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.8rem;
+  }
+
+  .tag-chip {
+    min-height: 36px;
+    padding: 0 0.7rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-size: 0.85rem;
+  }
+  .tag-clear {
+    min-height: 36px;
+    padding: 0 0.55rem;
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-size: 0.85rem;
+  }
+  /* Horizontal-scroll the chips on one row instead of wrapping to a tall
+     stack that pushes the table far down. */
+  .tag-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    /* Drag-to-scroll is for the horizontal strip only; vertical page scroll
+       stays unaffected since this row is otherwise a normal flex child. */
+  }
+
+  .table-toolbar {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .data-table {
+    display: none;
+  }
+  .card-list {
+    display: flex;
+    flex-direction: column;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .card-sort-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    padding: 0.45rem 0.5rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .card-sort-bar > span {
+    flex-shrink: 0;
+  }
+  .card-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-height: 36px;
+    padding: 0 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    touch-action: manipulation;
+    white-space: nowrap;
+    transition: color 150ms ease-out, border-color 150ms ease-out, background 150ms ease-out;
+  }
+  .card-sort:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--surface) 60%, var(--bg));
+  }
+  .card-sort:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  .card-sort[aria-sort='ascending'],
+  .card-sort[aria-sort='descending'] {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .card-sort[aria-sort='ascending'] .sort-icon,
+  .card-sort[aria-sort='descending'] .sort-icon {
+    opacity: 1;
+  }
+  .card {
+    padding: 0.75rem 0.85rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .card-list .card:last-child {
+    border-bottom: none;
+  }
+  .card-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+  .card-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text);
+    word-break: break-word;
+  }
+  .card-title a {
+    display: inline-block;
+  }
+  .card-highlight {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .card-highlight-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .card-highlight-value {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    margin: 0.5rem 0 0;
+    gap: 0.5rem 1.25rem;
+  }
+  .card-meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+  .card-meta-item dt {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  .card-meta-item dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .empty-state {
+    padding: 2rem 1rem;
   }
 }

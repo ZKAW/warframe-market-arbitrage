@@ -18,6 +18,8 @@ interface TabConfig<T> {
   defaultSortDir: SortDirection;
   enableTagFilter?: boolean;
   fixedTag?: string;
+  cardPrimary: string;
+  cardHighlight: string;
 }
 
 const relativeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
@@ -112,6 +114,8 @@ const TABS = {
     defaultSortDir: 'desc',
     enableTagFilter: true,
     fixedTag: undefined,
+    cardPrimary: 'set',
+    cardHighlight: 'arbitrage_value',
   } satisfies TabConfig<ArbitrageEntry>,
   ducats: {
     label: 'Ducats',
@@ -143,6 +147,8 @@ const TABS = {
     defaultSortDir: 'desc',
     enableTagFilter: undefined,
     fixedTag: 'prime',
+    cardPrimary: 'item',
+    cardHighlight: 'ducat_per_platinum',
   } satisfies TabConfig<DucatEntry>,
 } as const;
 
@@ -226,6 +232,8 @@ export default function Home() {
           defaultSortKey={tab.defaultSortKey}
           defaultSortDir={tab.defaultSortDir}
           enableTagFilter={tab.enableTagFilter}
+          cardPrimary={tab.cardPrimary}
+          cardHighlight={tab.cardHighlight}
         />
       )}
     </main>
