@@ -2,8 +2,14 @@ import { config } from './config';
 import { store, isFresh } from './store';
 import { fetchAllItems, fetchPriceData, getItemDetails } from './warframeApi';
 import { safeGetRequest } from './httpClient';
+import type { ArbitrageEntry } from './types';
 
-async function getItemSpecs(itemSlug) {
+interface ComponentSpec {
+  slug: string;
+  quantity: number;
+}
+
+async function getItemSpecs(itemSlug: string): Promise<ComponentSpec | null> {
   const details = await getItemDetails(itemSlug);
   if (!details) return null;
   return {
@@ -12,9 +18,11 @@ async function getItemSpecs(itemSlug) {
   };
 }
 
-async function getComponents(manifest) {
+async function getComponents(
+  manifest: { setParts?: string[] } | undefined
+): Promise<ComponentSpec[] | null> {
   const setParts = manifest?.setParts ?? [];
-  const components = [];
+  const components: ComponentSpec[] = [];
 
   for (const uid of setParts) {
     const specs = await getItemSpecs(uid);
@@ -28,7 +36,7 @@ async function getComponents(manifest) {
   return components;
 }
 
-async function processSingleSet(setSlug) {
+async function processSingleSet(setSlug: string): Promise<void> {
   const res = await safeGetRequest(`${config.apiBase}/items/${setSlug}`);
   if (!res) {
     store.arbitrage.delete(setSlug);
@@ -44,7 +52,7 @@ async function processSingleSet(setSlug) {
     return;
   }
 
-  let setPrice = null;
+  let setPrice: number | null = null;
   let totalPartsCost = 0;
   let incomplete = false;
 
@@ -83,7 +91,7 @@ async function processSingleSet(setSlug) {
   }
 }
 
-function pruneDelistedSets(currentSlugs) {
+function pruneDelistedSets(currentSlugs: Set<string>): void {
   for (const slug of store.arbitrage.keys()) {
     if (!currentSlugs.has(slug)) {
       store.arbitrage.delete(slug);
@@ -92,7 +100,7 @@ function pruneDelistedSets(currentSlugs) {
   }
 }
 
-async function runArbitrageCycle() {
+async function runArbitrageCycle(): Promise<void> {
   console.log(`[arbitrage] Cycle started: ${new Date().toISOString()}`);
   const items = await fetchAllItems();
   console.log(`[arbitrage] Fetched ${items ? items.length : 0} items`);
@@ -110,7 +118,8 @@ async function runArbitrageCycle() {
         await processSingleSet(setItem.slug);
       } catch (err) {
         // One bad set shouldn't abort the whole cycle.
-        console.log(`[arbitrage] Error processing ${setItem?.slug ?? '?'}: ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`[arbitrage] Error processing ${setItem?.slug ?? '?'}: ${message}`);
       }
     }
   } else {
@@ -121,15 +130,16 @@ async function runArbitrageCycle() {
   console.log('[arbitrage] Cycle complete.');
 }
 
-export function startArbitrageLoop() {
+export function startArbitrageLoop(): void {
   if (store.loopsStarted.arbitrage) return;
   store.loopsStarted.arbitrage = true;
 
-  const loop = async () => {
+  const loop = async (): Promise<void> => {
     try {
       await runArbitrageCycle();
     } catch (err) {
-      console.log(`[arbitrage] Loop error: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`[arbitrage] Loop error: ${message}`);
     }
     setTimeout(loop, config.retryIntervalMs);
   };
@@ -140,7 +150,7 @@ export function startArbitrageLoop() {
   loop();
 }
 
-export function getArbitrageData() {
+export function getArbitrageData(): { data: ArbitrageEntry[]; ready: boolean } {
   const rows = [...store.arbitrage.values()]
     .filter((entry) => isFresh(entry, config.maxDataAgeMs))
     .sort((a, b) => b.arbitrage_value - a.arbitrage_value);

@@ -18,6 +18,12 @@ Optional - copy `.env.local.example` to `.env.local` to adjust scrape
 interval, rate-limit backoff, and the profit/ratio thresholds for each
 tab.
 
+## Type checking
+
+```bash
+bun run typecheck
+```
+
 ## Production
 
 ```bash

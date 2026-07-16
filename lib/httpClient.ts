@@ -1,6 +1,6 @@
 import { config } from './config';
 
-function sleep(ms) {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -11,7 +11,10 @@ const HEADERS = {
   'User-Agent': 'Mozilla/5.0',
 };
 
-export async function safeGetRequest(url, { retries = 5 } = {}) {
+export async function safeGetRequest(
+  url: string,
+  { retries = 5 }: { retries?: number } = {}
+): Promise<Response | null> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, { headers: HEADERS });
@@ -35,7 +38,8 @@ export async function safeGetRequest(url, { retries = 5 } = {}) {
       // little then let the retry loop try again.
       await sleep(1000);
     } catch (err) {
-      console.log(`Request error: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`Request error: ${message}`);
       await sleep(2000);
     }
   }

@@ -1,9 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import DataTable from './components/DataTable';
+import DataTable, { type Column } from './components/DataTable';
+import type { ArbitrageEntry, DucatEntry } from '../lib/types';
 
 const REFRESH_MS = 15000;
+
+type Status = 'loading' | 'ok' | 'error';
+
+interface TabConfig<T> {
+  label: string;
+  endpoint: string;
+  emptyMessage: string;
+  columns: Column<T>[];
+}
 
 const TABS = {
   arbitrage: {
@@ -40,7 +50,7 @@ const TABS = {
       },
       { key: 'last_updated', label: 'Updated', align: 'right' },
     ],
-  },
+  } satisfies TabConfig<ArbitrageEntry>,
   ducats: {
     label: 'Ducats',
     endpoint: '/api/ducats',
@@ -66,15 +76,18 @@ const TABS = {
       { key: 'platinum_per_ducat', label: 'p/Ducat', align: 'right' },
       { key: 'last_updated', label: 'Updated', align: 'right' },
     ],
-  },
-};
+  } satisfies TabConfig<DucatEntry>,
+} as const;
+
+type TabKey = keyof typeof TABS;
+type Row = ArbitrageEntry | DucatEntry;
 
 export default function Home() {
-  const [active, setActive] = useState('arbitrage');
-  const [rows, setRows] = useState([]);
+  const [active, setActive] = useState<TabKey>('arbitrage');
+  const [rows, setRows] = useState<Row[]>([]);
   const [ready, setReady] = useState(false);
-  const [status, setStatus] = useState('loading'); // loading | ok | error
-  const [lastFetched, setLastFetched] = useState(null);
+  const [status, setStatus] = useState<Status>('loading');
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
   const tab = TABS[active];
 
@@ -87,7 +100,7 @@ export default function Home() {
       setReady(Boolean(body.ready));
       setStatus('ok');
       setLastFetched(new Date());
-    } catch (err) {
+    } catch {
       setStatus('error');
     }
   }, [tab.endpoint]);
@@ -114,7 +127,7 @@ export default function Home() {
       </header>
 
       <nav className="tabs">
-        {Object.entries(TABS).map(([key, t]) => (
+        {(Object.entries(TABS) as [TabKey, { label: string }][]).map(([key, t]) => (
           <button
             key={key}
             className={key === active ? 'active' : ''}
@@ -130,7 +143,15 @@ export default function Home() {
       ) : status === 'ok' && !ready && rows.length === 0 ? (
         <div className="empty-state">First scrape is still running - this can take a few minutes.</div>
       ) : (
-        <DataTable columns={tab.columns} rows={rows} emptyMessage={tab.emptyMessage} />
+        // The active tab's columns are typed to its own row shape (ArbitrageEntry
+        // or DucatEntry) for safety while authoring TABS above; here we render
+        // whichever is active against the matching slice of `rows`, so we widen
+        // to the shared Row union at this single boundary.
+        <DataTable
+          columns={tab.columns as unknown as Column<Row>[]}
+          rows={rows}
+          emptyMessage={tab.emptyMessage}
+        />
       )}
     </main>
   );
