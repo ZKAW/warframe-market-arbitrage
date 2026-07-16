@@ -15,8 +15,8 @@ still running" state until then.
 ## Tuning
 
 Optional - copy `.env.local.example` to `.env.local` to adjust scrape
-interval, rate-limit backoff, and the profit/ratio thresholds for each
-tab.
+interval, rate-limit backoff, the profit/ratio thresholds for each tab,
+and the `PORT` the dashboard listens on (default 3000).
 
 ## Type checking
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import DataTable, { type Column } from './components/DataTable';
+import DataTable, { type Column, type SortDirection } from './components/DataTable';
 import type { ArbitrageEntry, DucatEntry } from '../lib/types';
 
 const REFRESH_MS = 15000;
@@ -13,6 +13,8 @@ interface TabConfig<T> {
   endpoint: string;
   emptyMessage: string;
   columns: Column<T>[];
+  defaultSortKey: string;
+  defaultSortDir: SortDirection;
 }
 
 const TABS = {
@@ -35,21 +37,26 @@ const TABS = {
         label: 'Profit',
         align: 'right',
         render: (r) => `+${r.arbitrage_value}p`,
+        sortAccessor: (r) => r.arbitrage_value,
       },
       {
         key: 'set_price',
         label: 'Set price',
         align: 'right',
         render: (r) => `${r.set_price}p`,
+        sortAccessor: (r) => r.set_price,
       },
       {
         key: 'total_part_price',
         label: 'Parts cost',
         align: 'right',
         render: (r) => `${r.total_part_price}p`,
+        sortAccessor: (r) => r.total_part_price,
       },
       { key: 'last_updated', label: 'Updated', align: 'right' },
     ],
+    defaultSortKey: 'arbitrage_value',
+    defaultSortDir: 'desc',
   } satisfies TabConfig<ArbitrageEntry>,
   ducats: {
     label: 'Ducats',
@@ -71,11 +78,14 @@ const TABS = {
         label: 'Price',
         align: 'right',
         render: (r) => `${r.platinum_price}p`,
+        sortAccessor: (r) => r.platinum_price,
       },
       { key: 'ducat_per_platinum', label: 'Ducat/p', align: 'right' },
       { key: 'platinum_per_ducat', label: 'p/Ducat', align: 'right' },
       { key: 'last_updated', label: 'Updated', align: 'right' },
     ],
+    defaultSortKey: 'ducat_per_platinum',
+    defaultSortDir: 'desc',
   } satisfies TabConfig<DucatEntry>,
 } as const;
 
@@ -151,6 +161,8 @@ export default function Home() {
           columns={tab.columns as unknown as Column<Row>[]}
           rows={rows}
           emptyMessage={tab.emptyMessage}
+          defaultSortKey={tab.defaultSortKey}
+          defaultSortDir={tab.defaultSortDir}
         />
       )}
     </main>

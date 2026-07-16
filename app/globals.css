@@ -154,6 +154,36 @@ thead th {
   white-space: nowrap;
 }
 
+thead th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+thead th.sortable:hover {
+  color: var(--text);
+}
+
+thead th .th-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+thead th.num .th-label {
+  justify-content: flex-end;
+}
+
+.sort-indicator {
+  font-size: 0.65rem;
+  opacity: 0.4;
+}
+
+thead th.sortable:hover .sort-indicator,
+thead th[aria-sort] .sort-indicator {
+  opacity: 1;
+  color: var(--accent);
+}
+
 tbody td {
   padding: 0.7rem 0.9rem;
   border-bottom: 1px solid var(--border);
