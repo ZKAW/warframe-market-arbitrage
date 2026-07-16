@@ -30,3 +30,8 @@ bun run typecheck
 bun run build
 bun start
 ```
+
+* Or to deploy using pm2:
+```bash
+bun run deploy
+```

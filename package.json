@@ -6,7 +6,8 @@
     "dev": "bun --env-file=.env.local next dev",
     "build": "next build",
     "start": "bun --env-file=.env.local next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "bun install && bun run build && pm2 startOrReload ecosystem.config.js --update-env"
   },
   "dependencies": {
     "lucide-react": "^1.24.0",
