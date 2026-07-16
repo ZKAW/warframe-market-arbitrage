@@ -1,11 +1,13 @@
 import { config } from './config';
 import { store, isFresh } from './store';
-import { fetchAllItems, fetchPriceData, getItemDetails } from './warframeApi';
+import { fetchPriceData, getItemDetails } from './warframeApi';
+import type { RequestCache } from './scrape';
 import type { WarframeItem, DucatEntry } from './types';
 
 async function getItemDucats(
   item: WarframeItem,
-  bulkHasDucats: boolean
+  bulkHasDucats: boolean,
+  cache: RequestCache
 ): Promise<number | null> {
   const ducats = item.ducats;
   if (ducats) return ducats;
@@ -14,21 +16,25 @@ async function getItemDucats(
 
   if (!item.tags?.includes('prime')) return null;
 
-  const details = await getItemDetails(item.slug);
+  const details = await getItemDetails(item.slug, cache);
   if (!details) return null;
   return details.ducats ?? null;
 }
 
-async function processSingleItem(item: WarframeItem, bulkHasDucats: boolean): Promise<void> {
+async function processSingleItem(
+  item: WarframeItem,
+  bulkHasDucats: boolean,
+  cache: RequestCache
+): Promise<void> {
   const slug = item.slug;
 
-  const ducats = await getItemDucats(item, bulkHasDucats);
+  const ducats = await getItemDucats(item, bulkHasDucats, cache);
   if (!ducats) {
     store.ducats.delete(slug);
     return;
   }
 
-  const price = await fetchPriceData(slug);
+  const price = await fetchPriceData(slug, cache);
   if (!price || price <= 0) {
     store.ducats.delete(slug);
     return;
@@ -63,51 +69,34 @@ function pruneIneligibleItems(currentSlugs: Set<string>): void {
   }
 }
 
-async function runDucatCycle(): Promise<void> {
+export async function runDucatCycle(
+  items: WarframeItem[] | null,
+  cache: RequestCache
+): Promise<void> {
   console.log(`[ducats] Cycle started: ${new Date().toISOString()}`);
-  const items = await fetchAllItems();
-  console.log(`[ducats] Fetched ${items ? items.length : 0} items`);
 
-  if (items) {
-    const bulkHasDucats = items.some((i) => i.ducats);
-    const candidates = items.filter((i) => i.ducats || i.tags?.includes('prime'));
-    console.log(`[ducats] Checking ${candidates.length} ducat-eligible candidates`);
-
-    const currentSlugs = new Set(candidates.map((c) => c.slug));
-    pruneIneligibleItems(currentSlugs);
-
-    for (const item of candidates) {
-      try {
-        await processSingleItem(item, bulkHasDucats);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.log(`[ducats] Error processing ${item?.slug ?? '?'}: ${message}`);
-      }
-    }
-  } else {
-    console.log('[ducats] No items fetched (transient failure); keeping existing data.');
+  if (!items) {
+    console.log('[ducats] No items (transient failure); keeping existing data.');
+    return;
   }
 
-  store.ready.ducats = true;
-  console.log('[ducats] Cycle complete.');
-}
+  const bulkHasDucats = items.some((i) => i.ducats);
+  const candidates = items.filter((i) => i.ducats || i.tags?.includes('prime'));
+  console.log(`[ducats] Checking ${candidates.length} ducat-eligible candidates`);
 
-export function startDucatLoop(): void {
-  if (store.loopsStarted.ducats) return;
-  store.loopsStarted.ducats = true;
+  const currentSlugs = new Set(candidates.map((c) => c.slug));
+  pruneIneligibleItems(currentSlugs);
 
-  const loop = async (): Promise<void> => {
+  for (const item of candidates) {
     try {
-      await runDucatCycle();
+      await processSingleItem(item, bulkHasDucats, cache);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.log(`[ducats] Loop error: ${message}`);
+      console.log(`[ducats] Error processing ${item?.slug ?? '?'}: ${message}`);
     }
-    setTimeout(loop, config.retryIntervalMs);
-  };
+  }
 
-  // Fire-and-forget - see the comment in arbitrage.ts's startArbitrageLoop.
-  loop();
+  console.log('[ducats] Cycle complete.');
 }
 
 export function getDucatData(): { data: DucatEntry[]; ready: boolean } {

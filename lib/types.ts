@@ -5,6 +5,9 @@ export interface ArbitrageEntry {
   arbitrage_value: number;
   set_price: number;
   total_part_price: number;
+  // 48h closed-trade volume from the v1 statistics endpoint; null when the
+  // statistics call failed (the row is then kept but never passes minVolume).
+  volume: number | null;
   market_url: string;
   last_updated: string;
   tags: string[];

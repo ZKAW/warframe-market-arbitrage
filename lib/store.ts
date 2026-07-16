@@ -3,10 +3,10 @@ import type { ArbitrageEntry, DucatEntry } from './types';
 interface Store {
   arbitrage: Map<string, ArbitrageEntry>;
   ducats: Map<string, DucatEntry>;
-  // Guards so instrumentation's register() can be called more than
+  // Guard so instrumentation's register() can be called more than
   // once (Next.js docs recommend not assuming exactly-once) without
-  // stacking up duplicate polling loops.
-  loopsStarted: { arbitrage: boolean; ducats: boolean };
+  // stacking up a duplicate scrape loop.
+  loopsStarted: boolean;
   // Lets the frontend distinguish "no matches yet" from
   // "first scrape hasn't finished yet".
   ready: { arbitrage: boolean; ducats: boolean };
@@ -23,7 +23,7 @@ function initStore(): Store {
     g.__warframeMarketStore__ = {
       arbitrage: new Map(),
       ducats: new Map(),
-      loopsStarted: { arbitrage: false, ducats: false },
+      loopsStarted: false,
       ready: { arbitrage: false, ducats: false },
     };
   }

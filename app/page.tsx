@@ -108,6 +108,13 @@ const TABS = {
         render: (r) => `${r.total_part_price}p`,
         sortAccessor: (r) => r.total_part_price,
       },
+      {
+        key: 'volume',
+        label: 'Vol (48h)',
+        align: 'right',
+        render: (r) => (r.volume == null ? '—' : `${r.volume}`),
+        sortAccessor: (r) => (r.volume == null ? -1 : r.volume),
+      },
       { key: 'last_updated', label: 'Updated', align: 'right', render: (r) => <RelativeTime iso={r.last_updated} />, sortAccessor: (r) => new Date(r.last_updated).getTime() },
     ],
     defaultSortKey: 'arbitrage_value',
