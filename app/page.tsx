@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import DataTable, { type Column, type SortDirection } from './components/DataTable';
+import Button from './components/Button';
 import type { ArbitrageEntry, DucatEntry } from '../lib/types';
 
 const REFRESH_MS = 15000;
@@ -15,6 +16,58 @@ interface TabConfig<T> {
   columns: Column<T>[];
   defaultSortKey: string;
   defaultSortDir: SortDirection;
+  enableTagFilter?: boolean;
+  fixedTag?: string;
+}
+
+const relativeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ['year', 31_536_000_000],
+  ['month', 2_592_000_000],
+  ['day', 86_400_000],
+  ['hour', 3_600_000],
+  ['minute', 60_000],
+  ['second', 1_000],
+];
+
+// Floor future diffs (server clock skew or a just-written timestamp) to 0 so
+// the display never reads "in N seconds" - this measures elapsed time since
+// the last update, never a future moment.
+function relativeParts(ms: number) {
+  const elapsed = Math.max(0, ms);
+  for (const [unit, size] of RELATIVE_UNITS) {
+    if (elapsed >= size) return relativeFormatter.format(-Math.round(elapsed / size), unit);
+  }
+  return relativeFormatter.format(0, 'second');
+}
+
+// Elapsed time since `iso`. Ticks every second so the seconds counter is live.
+function RelativeTime({ iso }: { iso: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  const absolute = new Date(iso).toLocaleString();
+  return (
+    <time dateTime={iso} title={absolute}>
+      {relativeParts(now - new Date(iso).getTime())}
+    </time>
+  );
+}
+
+// Header status line. Ticks every second so the "X ago" suffix counts seconds.
+function HeaderUpdatedTime({ fetched }: { fetched: Date }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span>
+      updated {fetched.toLocaleTimeString()} ({relativeParts(now - fetched.getTime())})
+    </span>
+  );
 }
 
 const TABS = {
@@ -53,10 +106,12 @@ const TABS = {
         render: (r) => `${r.total_part_price}p`,
         sortAccessor: (r) => r.total_part_price,
       },
-      { key: 'last_updated', label: 'Updated', align: 'right' },
+      { key: 'last_updated', label: 'Updated', align: 'right', render: (r) => <RelativeTime iso={r.last_updated} />, sortAccessor: (r) => new Date(r.last_updated).getTime() },
     ],
     defaultSortKey: 'arbitrage_value',
     defaultSortDir: 'desc',
+    enableTagFilter: true,
+    fixedTag: undefined,
   } satisfies TabConfig<ArbitrageEntry>,
   ducats: {
     label: 'Ducats',
@@ -82,10 +137,12 @@ const TABS = {
       },
       { key: 'ducat_per_platinum', label: 'Ducat/p', align: 'right' },
       { key: 'platinum_per_ducat', label: 'p/Ducat', align: 'right' },
-      { key: 'last_updated', label: 'Updated', align: 'right' },
+      { key: 'last_updated', label: 'Updated', align: 'right', render: (r) => <RelativeTime iso={r.last_updated} />, sortAccessor: (r) => new Date(r.last_updated).getTime() },
     ],
     defaultSortKey: 'ducat_per_platinum',
     defaultSortDir: 'desc',
+    enableTagFilter: undefined,
+    fixedTag: 'prime',
   } satisfies TabConfig<DucatEntry>,
 } as const;
 
@@ -130,21 +187,24 @@ export default function Home() {
         </h1>
         <div className={`pulse pulse-${status}`}>
           <span className="dot" />
-          {status === 'ok' && lastFetched
-            ? `updated ${lastFetched.toLocaleTimeString()}`
-            : status}
+          {status === 'ok' && lastFetched ? (
+            <HeaderUpdatedTime fetched={lastFetched} />
+          ) : (
+            status
+          )}
         </div>
       </header>
 
       <nav className="tabs">
         {(Object.entries(TABS) as [TabKey, { label: string }][]).map(([key, t]) => (
-          <button
+          <Button
             key={key}
-            className={key === active ? 'active' : ''}
+            variant="tab"
+            isActive={key === active}
             onClick={() => setActive(key)}
           >
             {t.label}
-          </button>
+          </Button>
         ))}
       </nav>
 
@@ -158,11 +218,14 @@ export default function Home() {
         // whichever is active against the matching slice of `rows`, so we widen
         // to the shared Row union at this single boundary.
         <DataTable
+          key={active}
           columns={tab.columns as unknown as Column<Row>[]}
           rows={rows}
           emptyMessage={tab.emptyMessage}
+          fixedTag={tab.fixedTag}
           defaultSortKey={tab.defaultSortKey}
           defaultSortDir={tab.defaultSortDir}
+          enableTagFilter={tab.enableTagFilter}
         />
       )}
     </main>

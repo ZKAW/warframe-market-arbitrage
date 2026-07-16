@@ -7,6 +7,7 @@ export interface ArbitrageEntry {
   total_part_price: number;
   market_url: string;
   last_updated: string;
+  tags: string[];
 }
 
 export interface DucatEntry {
@@ -17,6 +18,7 @@ export interface DucatEntry {
   platinum_per_ducat: number;
   market_url: string;
   last_updated: string;
+  tags: string[];
 }
 
 // warframe.market's v2 API responses - only the fields this app reads are

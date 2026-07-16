@@ -2,7 +2,7 @@ import { config } from './config';
 import { store, isFresh } from './store';
 import { fetchAllItems, fetchPriceData, getItemDetails } from './warframeApi';
 import { safeGetRequest } from './httpClient';
-import type { ArbitrageEntry } from './types';
+import type { ArbitrageEntry, WarframeItem } from './types';
 
 interface ComponentSpec {
   slug: string;
@@ -36,7 +36,8 @@ async function getComponents(
   return components;
 }
 
-async function processSingleSet(setSlug: string): Promise<void> {
+async function processSingleSet(setItem: WarframeItem): Promise<void> {
+  const setSlug = setItem.slug;
   const res = await safeGetRequest(`${config.apiBase}/items/${setSlug}`);
   if (!res) {
     store.arbitrage.delete(setSlug);
@@ -84,6 +85,7 @@ async function processSingleSet(setSlug: string): Promise<void> {
       total_part_price: totalPartsCost,
       market_url: `https://warframe.market/items/${setSlug}`,
       last_updated: new Date().toISOString(),
+      tags: setItem.tags ?? [],
     });
     console.log(`[arbitrage] Profit found: ${setSlug} (+${arbitrageValue}p)`);
   } else if (store.arbitrage.delete(setSlug)) {
@@ -115,7 +117,7 @@ async function runArbitrageCycle(): Promise<void> {
 
     for (const setItem of sets) {
       try {
-        await processSingleSet(setItem.slug);
+        await processSingleSet(setItem);
       } catch (err) {
         // One bad set shouldn't abort the whole cycle.
         const message = err instanceof Error ? err.message : String(err);

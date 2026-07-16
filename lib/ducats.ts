@@ -49,6 +49,7 @@ async function processSingleItem(item: WarframeItem, bulkHasDucats: boolean): Pr
     platinum_per_ducat: Math.round((price / ducats) * 1000) / 1000,
     market_url: `https://warframe.market/items/${slug}`,
     last_updated: new Date().toISOString(),
+    tags: item.tags ?? [],
   });
   console.log(`[ducats] Good deal: ${slug} (${ducats} ducats for ${price}p, ratio ${ratio.toFixed(2)})`);
 }
