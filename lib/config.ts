@@ -60,16 +60,14 @@ export const config = {
   // semaphore in httpClient.ts sized to this, so their hotConcurrency /
   // catalogConcurrency worker pools can never stack beyond this many
   // concurrent downstream requests. requestDelayMs is the sustained-rate
-  // gate; this is the burst cap. Default 3 keeps a ~240-row sweep under
-  // ~3-4 min at 0.35s/req (closer to the hotRetryIntervalMs staleness
-  // budget) without storming 429s; measured ceiling on warframe.market is
+  // gate; this is the burst cap. Default 6 keeps a ~240-row sweep under the
   // ~3 req/s sustained before backoffs dominate. Raise cautiously.
-  maxConcurrentRequests: num(rateLimit.maxConcurrentRequests, 3),
+  maxConcurrentRequests: num(rateLimit.maxConcurrentRequests, 6),
   // Delay after each successful request (ms). Seconds in the YAML.
-  requestDelayMs: num(rateLimit.requestDelay, 0.35) * 1000,
+  requestDelayMs: num(rateLimit.requestDelay, 1.5) * 1000,
 
   // Wait time after a 429 (ms). Seconds in the YAML.
-  rateLimitDelayMs: num(rateLimit.rateLimitDelay, 10) * 1000,
+  rateLimitDelayMs: num(rateLimit.rateLimitDelay, 1.5) * 1000,
 
   // Hot-loop staleness budget (ms). Under the continuous hot engine,
   // hotRetryIntervalMs is no longer a sleep timer - the loop pulls the
@@ -82,10 +80,10 @@ export const config = {
   hotRetryIntervalMs: num(hot.hotRetryInterval, 120) * 1000,
   // Hot-loop: max sets/prime entries processed in parallel within one sweep.
   // warframe.market rate-limits aggressively - measured tolerable sustained
-  // rate is below ~3 req/s. Default 2 keeps the hot sweep parallel without
+  // rate is below ~3 req/s. Default 4 keeps the hot sweep parallel without
   // 429-storming; the per-request requestDelayMs is the primary rate gate,
   // this just bounds the burst. Tune up cautiously.
-  hotConcurrency: num(hot.hotConcurrency, 2),
+  hotConcurrency: num(hot.hotConcurrency, 4),
   // Catalog: max sets/prime entries built in parallel during a cold build.
   // Same rate-limit ceiling as the hot loop applies here - the cold build
   // runs concurrently with the hot sweep, so the two pools' worker counts
@@ -100,9 +98,9 @@ export const config = {
   // seconds instead of sitting idle for hours showing nothing.
   coldRetryMs: num(catalog.coldRetrySeconds, 30) * 1000,
 
-  minArbitrageValue: num(filters.minArbitrageValue, 10),
-  minDucatPerPlatinum: num(filters.minDucatPerPlatinum, 0),
-  minDucats: num(filters.minDucats, 0),
+  minArbitrageValue: num(filters.minArbitrageValue, 15),
+  minDucatPerPlatinum: num(filters.minDucatPerPlatinum, 20),
+  minDucats: num(filters.minDucats, 15),
 
   // Arbitrage: minimum 48h closed-trade volume for a set to clear the bar.
   // Stops the table from surfacing Sets whose "profit" is just a stale offer

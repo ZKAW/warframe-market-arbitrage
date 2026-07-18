@@ -2,27 +2,27 @@
 
 filters:
   # Arbitrage: minimum platinum profit to show a set.
-  minArbitrageValue: 10
+  minArbitrageValue: 15
   # Arbitrage: minimum 48h closed-trade volume for a set to show.
   minVolume: 2
   # Ducats: minimum ducat-per-platinum ratio to show an item.
-  minDucatPerPlatinum: 10
+  minDucatPerPlatinum: 20
   # Ducats: minimum ducat value to show an item.
   minDucats: 15
 
 rateLimit:
   # Process-wide cap on simultaneous in-flight warframe.market fetches (burst).
-  maxConcurrentRequests: 3
+  maxConcurrentRequests: 6
   # Delay after each successful request, seconds (sustained-rate gate).
-  requestDelay: 0.35
+  requestDelay: 1.5
   # Backoff after a 429, seconds.
-  rateLimitDelay: 10
+  rateLimitDelay: 1.5
 
 hot:
   # Time between price/volume sweeps, seconds (staleness budget).
   hotRetryInterval: 120
   # Max sets/prime items processed in parallel within one hot sweep.
-  hotConcurrency: 2
+  hotConcurrency: 4
 
 catalog:
   # Max sets/prime items built in parallel during a cold catalog rebuild.
