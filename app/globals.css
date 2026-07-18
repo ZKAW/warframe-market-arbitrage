@@ -69,6 +69,10 @@ main {
   font-size: 0.75rem;
   color: var(--muted);
 }
+.pulse-sep {
+  margin: 0 0.35rem;
+  opacity: 0.5;
+}
 
 .dot {
   width: 7px;

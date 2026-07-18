@@ -1,68 +1,26 @@
 import { config } from './config';
-import { store, isFresh } from './store';
-import {
-  fetchPriceData,
-  fetchSetManifest,
-  fetchStatisticsVolume,
-  getItemDetails,
-} from './warframeApi';
+import { store } from './store';
+import { broadcast } from './subscriptions';
+import { fetchPriceData, fetchStatisticsVolume } from './warframeApi';
+import { mapWithConcurrency } from './scrape';
 import type { RequestCache } from './scrape';
-import type { ArbitrageEntry, WarframeItem } from './types';
+import type { ArbitrageEntry } from './types';
+import type { SetEntry } from './store';
 
-interface ComponentSpec {
-  slug: string;
-  quantity: number;
-}
 
-async function getItemSpecs(
-  itemSlug: string,
-  cache: RequestCache
-): Promise<ComponentSpec | null> {
-  const details = await getItemDetails(itemSlug, cache);
-  if (!details) return null;
-  return {
-    slug: details.slug,
-    quantity: details.quantityInSet ?? 1,
-  };
-}
-
-async function getComponents(
-  manifest: { setParts?: string[] } | undefined,
-  cache: RequestCache
-): Promise<ComponentSpec[] | null> {
-  const setParts = manifest?.setParts ?? [];
-  const components: ComponentSpec[] = [];
-
-  for (const uid of setParts) {
-    const specs = await getItemSpecs(uid, cache);
-    // Hard fail on any missing part instead of returning a partial list -
-    // a partial parts list would silently undercount total cost and
-    // produce false-positive arbitrage.
-    if (!specs) return null;
-    components.push(specs);
-  }
-
-  return components;
+// Delete + broadcast. Pruning an arbitrage row only matters if the slug
+// actually existed in the store; broadcasting on a no-op delete would spam
+// subscribers with unchanged snapshots.
+function removeArbitrageRow(slug: string): void {
+  if (store.arbitrage.delete(slug)) broadcast('arbitrage', getArbitrageData());
 }
 
 async function processSingleSet(
-  setItem: WarframeItem,
+  entry: SetEntry,
   cache: RequestCache
 ): Promise<void> {
-  const setSlug = setItem.slug;
-  const manifest = await fetchSetManifest(setSlug, cache);
-  if (!manifest) {
-    store.arbitrage.delete(setSlug);
-    return;
-  }
-
-  const components = await getComponents(manifest, cache);
-
-  if (!components || components.length === 0) {
-    store.arbitrage.delete(setSlug);
-    return;
-  }
-
+  const setSlug = entry.setItem.slug;
+  const components = entry.components;
   let setPrice: number | null = null;
   let totalPartsCost = 0;
   let incomplete = false;
@@ -81,7 +39,7 @@ async function processSingleSet(
   }
 
   if (incomplete || !setPrice) {
-    store.arbitrage.delete(setSlug);
+    removeArbitrageRow(setSlug);
     return;
   }
 
@@ -90,6 +48,7 @@ async function processSingleSet(
   if (arbitrageValue < config.minArbitrageValue) {
     if (store.arbitrage.delete(setSlug)) {
       console.log(`[arbitrage] No longer profitable, removed: ${setSlug}`);
+      broadcast('arbitrage', getArbitrageData());
     }
     return;
   }
@@ -103,6 +62,7 @@ async function processSingleSet(
       console.log(
         `[arbitrage] Removed low-volume set: ${setSlug} (48h vol ${volume} < ${config.minVolume})`
       );
+      broadcast('arbitrage', getArbitrageData());
     }
     return;
   }
@@ -115,11 +75,12 @@ async function processSingleSet(
     volume,
     market_url: `https://warframe.market/items/${setSlug}`,
     last_updated: new Date().toISOString(),
-    tags: setItem.tags ?? [],
+    tags: entry.setItem.tags ?? [],
   });
   console.log(
     `[arbitrage] Profit found: ${setSlug} (+${arbitrageValue}p, 48h vol ${volume ?? '?'})`
   );
+  broadcast('arbitrage', getArbitrageData());
 }
 
 function pruneDelistedSets(currentSlugs: Set<string>): void {
@@ -127,46 +88,57 @@ function pruneDelistedSets(currentSlugs: Set<string>): void {
     if (!currentSlugs.has(slug)) {
       store.arbitrage.delete(slug);
       console.log(`[arbitrage] Removed delisted/renamed set: ${slug}`);
+      broadcast('arbitrage', getArbitrageData());
     }
   }
 }
 
-export async function runArbitrageCycle(
-  items: WarframeItem[] | null,
-  cache: RequestCache
-): Promise<void> {
-  console.log(`[arbitrage] Cycle started: ${new Date().toISOString()}`);
+export async function runArbitrageCycle(cache: RequestCache): Promise<void> {
+  pruneDelistedSets(new Set(store.catalog.sets.keys()));
 
-  if (!items) {
-    console.log('[arbitrage] No items (transient failure); keeping existing data.');
-    return;
-  }
+  // Sweep oldest-arbitrage-row first so stale rows get re-fetched before
+  // fresh ones within each cycle. Rows we've never priced yet sort ahead
+  // of everything (no last_updated => -Infinity) so newly-streamed
+  // catalog sets get their first price pass before any refresh work.
+  // Snapshot the catalog entries: the cold build streams sets into
+  // store.catalog.sets mid-sweep, and iterating a Map while it's being
+  // written from another coroutine is unspecified. The snapshot is the
+  // exact set this cycle owes work for; anything added after the snapshot
+  // waits for the next tick.
+  const work = [...store.catalog.sets.values()].sort((a, b) => {
+    const ta = store.arbitrage.get(a.setItem.slug)?.last_updated;
+    const tb = store.arbitrage.get(b.setItem.slug)?.last_updated;
+    const taMs = ta ? new Date(ta).getTime() : Number.NEGATIVE_INFINITY;
+    const tbMs = tb ? new Date(tb).getTime() : Number.NEGATIVE_INFINITY;
+    return taMs - tbMs;
+  });
 
-  const sets = items.filter((i) => i?.slug?.endsWith('_set'));
-  const currentSlugs = new Set(sets.map((s) => s.slug));
-
-  // Only prune "no longer exists" entries when we got a fresh, live
-  // listing - a transient fetch failure must not wipe existing data.
-  pruneDelistedSets(currentSlugs);
-
-  for (const setItem of sets) {
-    try {
-      await processSingleSet(setItem, cache);
-    } catch (err) {
-      // One bad set shouldn't abort the whole cycle.
+  await mapWithConcurrency(work, config.hotConcurrency, (entry) =>
+    processSingleSet(entry, cache).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
-      console.log(`[arbitrage] Error processing ${setItem?.slug ?? '?'}: ${message}`);
-    }
-  }
-
-  console.log('[arbitrage] Cycle complete.');
+      console.log(`[arbitrage] Error processing ${entry?.setItem?.slug ?? '?'}: ${message}`);
+    })
+  );
 }
 
 
-export function getArbitrageData(): { data: ArbitrageEntry[]; ready: boolean } {
+export function getArbitrageData(): {
+  data: ArbitrageEntry[];
+  ready: boolean;
+  lastCycleCompletedAt: string | null;
+} {
+  // Rows persist in the store until explicitly pruned (delisted,
+ // unprofitable, low-volume). We deliberately do NOT filter by age here:
+ // the hot sweep already prioritizes stale rows (oldest last_updated
+ // first), so old data is replaced by fresh data on the cycle's cadence
+ // rather than hidden behind a freshness threshold. Pruning belongs to
+ // the lifecycle in arbitrage.ts, not to a render-time filter.
   const rows = [...store.arbitrage.values()]
-    .filter((entry) => isFresh(entry, config.maxDataAgeMs))
     .sort((a, b) => b.arbitrage_value - a.arbitrage_value);
 
-  return { data: rows, ready: store.ready.arbitrage };
+  return {
+    data: rows,
+    ready: store.ready.arbitrage,
+    lastCycleCompletedAt: store.lastCycleCompletedAt.arbitrage,
+  };
 }

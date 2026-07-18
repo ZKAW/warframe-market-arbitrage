@@ -51,9 +51,8 @@ async function cachedJson<T>(
   return res.json().catch(() => null) as Promise<T | null>;
 }
 
-// The manifest of every tradeable item. Called once per cycle at the top
-// of runScrapeCycle; not itself cached since there is exactly one call per
-// tick by construction.
+// Called once per catalog rebuild by lib/catalog.ts (cold path). Not
+// itself cached since each build mints its own RequestCache.
 export async function fetchAllItems(): Promise<WarframeItem[] | null> {
   const json: ItemListPayload | null = await cachedJson<ItemListPayload>(
     `${config.apiBase}/items`

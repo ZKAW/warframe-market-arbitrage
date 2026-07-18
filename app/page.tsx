@@ -1,17 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import DataTable, { type Column, type SortDirection } from './components/DataTable';
 import Button from './components/Button';
 import type { ArbitrageEntry, DucatEntry } from '../lib/types';
 
-const REFRESH_MS = 15000;
 
 type Status = 'loading' | 'ok' | 'error';
 
+interface PipelinePayload {
+  data: ArbitrageEntry[] | DucatEntry[];
+  ready: boolean;
+  lastCycleCompletedAt: string | null;
+}
+
+interface SnapshotPayload {
+  arbitrage: PipelinePayload;
+  ducats: PipelinePayload;
+}
+
+interface SliceState<T extends Row> {
+  rows: T[];
+  ready: boolean;
+  fetched: Date | null;
+  // ISO timestamp of the last completed scrape cycle for this pipeline,
+  // or null if no full cycle has finished yet. Ticks via the regular
+  // RelativeTime 1s clock so "X ago" stays live.
+  lastCycleCompletedAt: string | null;
+}
+function emptySlice<T extends Row>(): SliceState<T> {
+  return { rows: [], ready: false, fetched: null, lastCycleCompletedAt: null };
+}
 interface TabConfig<T> {
   label: string;
-  endpoint: string;
   emptyMessage: string;
   columns: Column<T>[];
   defaultSortKey: string;
@@ -58,16 +79,36 @@ function RelativeTime({ iso }: { iso: string }) {
   );
 }
 
-// Header status line. Ticks every second so the "X ago" suffix counts seconds.
-function HeaderUpdatedTime({ fetched }: { fetched: Date }) {
+// Header status line. Ticks every second so "X ago" stays live.
+// Shows the active pipeline's last update (when an SSE event last
+// arrived) plus, once a full cycle has ever completed, when that
+// cycle finished. While no cycle has completed yet, says so plainly.
+function HeaderUpdatedTime({
+  fetched,
+  lastCycleCompletedAt,
+}: {
+  fetched: Date;
+  lastCycleCompletedAt: string | null;
+}) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
+
+  // If the condition is true, it renders the separator and text. 
+  // If false, it evaluates to false and React renders nothing.
+  const cyclePart = !lastCycleCompletedAt && (
+    <>
+      <span className="pulse-sep">·</span>
+      cycle still running
+    </>
+  );
+
   return (
     <span>
-      updated {fetched.toLocaleTimeString()} ({relativeParts(now - fetched.getTime())})
+      updated {relativeParts(now - fetched.getTime())}
+      {cyclePart}
     </span>
   );
 }
@@ -75,7 +116,6 @@ function HeaderUpdatedTime({ fetched }: { fetched: Date }) {
 const TABS = {
   arbitrage: {
     label: 'Arbitrage',
-    endpoint: '/api/arbitrage',
     emptyMessage: 'No profitable sets right now. Check back later.',
     columns: [
       {
@@ -126,7 +166,6 @@ const TABS = {
   } satisfies TabConfig<ArbitrageEntry>,
   ducats: {
     label: 'Ducats',
-    endpoint: '/api/ducats',
     emptyMessage: 'No ducat deals clearing the bar right now.',
     columns: [
       {
@@ -164,33 +203,81 @@ type Row = ArbitrageEntry | DucatEntry;
 
 export default function Home() {
   const [active, setActive] = useState<TabKey>('arbitrage');
-  const [rows, setRows] = useState<Row[]>([]);
-  const [ready, setReady] = useState(false);
+  const [arbitrage, setArbitrage] = useState<SliceState<ArbitrageEntry>>(emptySlice);
+  const [ducats, setDucats] = useState<SliceState<DucatEntry>>(emptySlice);
   const [status, setStatus] = useState<Status>('loading');
-  const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
   const tab = TABS[active];
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch(tab.endpoint, { cache: 'no-store' });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || 'Request failed');
-      setRows(Array.isArray(body.data) ? body.data : []);
-      setReady(Boolean(body.ready));
-      setStatus('ok');
-      setLastFetched(new Date());
-    } catch {
-      setStatus('error');
-    }
-  }, [tab.endpoint]);
+  const slice = active === 'arbitrage' ? arbitrage : ducats;
 
   useEffect(() => {
-    setStatus('loading');
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [load]);
+    const stream = new EventSource('/api/stream');
+
+    const onSnapshot = (e: MessageEvent<string>) => {
+      const payload = JSON.parse(e.data) as SnapshotPayload;
+      const now = new Date();
+      setArbitrage({
+        rows: payload.arbitrage.data as ArbitrageEntry[],
+        ready: payload.arbitrage.ready,
+        fetched: now,
+        lastCycleCompletedAt: payload.arbitrage.lastCycleCompletedAt,
+      });
+      setDucats({
+        rows: payload.ducats.data as DucatEntry[],
+        ready: payload.ducats.ready,
+        fetched: now,
+        lastCycleCompletedAt: payload.ducats.lastCycleCompletedAt,
+      });
+      setStatus('ok');
+    };
+
+    const onArbitrage = (e: MessageEvent<string>) => {
+      const payload = JSON.parse(e.data) as PipelinePayload;
+      setArbitrage({
+        rows: payload.data as ArbitrageEntry[],
+        ready: payload.ready,
+        fetched: new Date(),
+        lastCycleCompletedAt: payload.lastCycleCompletedAt,
+      });
+      setStatus('ok');
+    };
+
+    const onDucats = (e: MessageEvent<string>) => {
+      const payload = JSON.parse(e.data) as PipelinePayload;
+      setDucats({
+        rows: payload.data as DucatEntry[],
+        ready: payload.ready,
+        fetched: new Date(),
+        lastCycleCompletedAt: payload.lastCycleCompletedAt,
+      });
+      setStatus('ok');
+    };
+
+    // EventSource fires onerror on transient drops AND on a hard close; it
+    // auto-reconnects, so only surface the error state if we have nothing
+    // to show yet. Once we've had data, keep showing the stale snapshot
+    // while the stream reconnects in the background.
+    const onError = () => {
+      if (!arbitrage.fetched && !ducats.fetched) setStatus('error');
+    };
+
+    stream.addEventListener('snapshot', onSnapshot);
+    stream.addEventListener('arbitrage', onArbitrage);
+    stream.addEventListener('ducats', onDucats);
+    stream.addEventListener('error', onError);
+
+    return () => {
+      stream.removeEventListener('snapshot', onSnapshot);
+      stream.removeEventListener('arbitrage', onArbitrage);
+      stream.removeEventListener('ducats', onDucats);
+      stream.removeEventListener('error', onError);
+      stream.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onError reads
+    // stale slice state, but the intent is "no data yet"; re-subscribing on
+    // every fetch would thrash the stream. The once-per-mount subscription
+    // is correct.
+  }, []);
 
   return (
     <main>
@@ -200,8 +287,8 @@ export default function Home() {
         </h1>
         <div className={`pulse pulse-${status}`}>
           <span className="dot" />
-          {status === 'ok' && lastFetched ? (
-            <HeaderUpdatedTime fetched={lastFetched} />
+          {status === 'ok' && slice.fetched ? (
+            <HeaderUpdatedTime fetched={slice.fetched} lastCycleCompletedAt={slice.lastCycleCompletedAt} />
           ) : (
             status
           )}
@@ -223,7 +310,7 @@ export default function Home() {
 
       {status === 'error' ? (
         <div className="empty-state error">Something went wrong loading this data. Retrying shortly.</div>
-      ) : status === 'ok' && !ready && rows.length === 0 ? (
+      ) : status === 'ok' && !slice.ready && slice.rows.length === 0 ? (
         <div className="empty-state">First scrape is still running - this can take a few minutes.</div>
       ) : (
         // The active tab's columns are typed to its own row shape (ArbitrageEntry
@@ -233,7 +320,7 @@ export default function Home() {
         <DataTable
           key={active}
           columns={tab.columns as unknown as Column<Row>[]}
-          rows={rows}
+          rows={slice.rows}
           emptyMessage={tab.emptyMessage}
           fixedTag={tab.fixedTag}
           defaultSortKey={tab.defaultSortKey}

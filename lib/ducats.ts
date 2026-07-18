@@ -1,49 +1,39 @@
 import { config } from './config';
-import { store, isFresh } from './store';
-import { fetchPriceData, getItemDetails } from './warframeApi';
+import { store } from './store';
+import { broadcast } from './subscriptions';
+import { fetchPriceData } from './warframeApi';
+import { mapWithConcurrency } from './scrape';
 import type { RequestCache } from './scrape';
-import type { WarframeItem, DucatEntry } from './types';
+import type { DucatEntry } from './types';
+import type { PrimeEntry } from './store';
 
-async function getItemDucats(
-  item: WarframeItem,
-  bulkHasDucats: boolean,
-  cache: RequestCache
-): Promise<number | null> {
-  const ducats = item.ducats;
-  if (ducats) return ducats;
-
-  if (bulkHasDucats) return null; // field exists in bulk payload, item just has none
-
-  if (!item.tags?.includes('prime')) return null;
-
-  const details = await getItemDetails(item.slug, cache);
-  if (!details) return null;
-  return details.ducats ?? null;
+// Delete + broadcast. Only matters if the slug actually existed; a no-op
+// delete would spam subscribers with unchanged snapshots.
+function removeDucatRow(slug: string): void {
+  if (store.ducats.delete(slug)) broadcast('ducats', getDucatData());
 }
 
 async function processSingleItem(
-  item: WarframeItem,
-  bulkHasDucats: boolean,
+  entry: PrimeEntry,
   cache: RequestCache
 ): Promise<void> {
-  const slug = item.slug;
-
-  const ducats = await getItemDucats(item, bulkHasDucats, cache);
+  const slug = entry.item.slug;
+  const ducats = entry.ducats;
   if (!ducats) {
-    store.ducats.delete(slug);
+    removeDucatRow(slug);
     return;
   }
 
   const price = await fetchPriceData(slug, cache);
   if (!price || price <= 0) {
-    store.ducats.delete(slug);
+    removeDucatRow(slug);
     return;
   }
 
   const ratio = ducats / price;
 
   if (ratio < config.minDucatPerPlatinum || ducats < config.minDucats) {
-    store.ducats.delete(slug);
+    removeDucatRow(slug);
     return;
   }
 
@@ -55,9 +45,10 @@ async function processSingleItem(
     platinum_per_ducat: Math.round((price / ducats) * 1000) / 1000,
     market_url: `https://warframe.market/items/${slug}`,
     last_updated: new Date().toISOString(),
-    tags: item.tags ?? [],
+    tags: entry.item.tags ?? [],
   });
   console.log(`[ducats] Good deal: ${slug} (${ducats} ducats for ${price}p, ratio ${ratio.toFixed(2)})`);
+  broadcast('ducats', getDucatData());
 }
 
 function pruneIneligibleItems(currentSlugs: Set<string>): void {
@@ -65,44 +56,53 @@ function pruneIneligibleItems(currentSlugs: Set<string>): void {
     if (!currentSlugs.has(slug)) {
       store.ducats.delete(slug);
       console.log(`[ducats] Removed no-longer-eligible/delisted item: ${slug}`);
+      broadcast('ducats', getDucatData());
     }
   }
 }
 
-export async function runDucatCycle(
-  items: WarframeItem[] | null,
-  cache: RequestCache
-): Promise<void> {
-  console.log(`[ducats] Cycle started: ${new Date().toISOString()}`);
+export async function runDucatCycle(cache: RequestCache): Promise<void> {
+  pruneIneligibleItems(new Set(store.catalog.primes.keys()));
 
-  if (!items) {
-    console.log('[ducats] No items (transient failure); keeping existing data.');
-    return;
-  }
+  // Sweep oldest-ducats-row first so stale rows get re-fetched before
+  // fresh ones within each cycle. Rows we've never priced yet sort ahead
+  // of everything (no last_updated => -Infinity) so newly-streamed
+  // catalog primes get their first price pass before any refresh work.
+  // Snapshot the primes: the cold build reassigns store.catalog.primes
+  // on completion, and iterating a Map replaced mid-sweep is
+  // unspecified. The snapshot is the exact set this cycle owes work for.
+  const work = [...store.catalog.primes.values()].sort((a, b) => {
+    const ta = store.ducats.get(a.item.slug)?.last_updated;
+    const tb = store.ducats.get(b.item.slug)?.last_updated;
+    const taMs = ta ? new Date(ta).getTime() : Number.NEGATIVE_INFINITY;
+    const tbMs = tb ? new Date(tb).getTime() : Number.NEGATIVE_INFINITY;
+    return taMs - tbMs;
+  });
 
-  const bulkHasDucats = items.some((i) => i.ducats);
-  const candidates = items.filter((i) => i.ducats || i.tags?.includes('prime'));
-  console.log(`[ducats] Checking ${candidates.length} ducat-eligible candidates`);
-
-  const currentSlugs = new Set(candidates.map((c) => c.slug));
-  pruneIneligibleItems(currentSlugs);
-
-  for (const item of candidates) {
-    try {
-      await processSingleItem(item, bulkHasDucats, cache);
-    } catch (err) {
+  await mapWithConcurrency(work, config.hotConcurrency, (entry) =>
+    processSingleItem(entry, cache).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
-      console.log(`[ducats] Error processing ${item?.slug ?? '?'}: ${message}`);
-    }
-  }
-
-  console.log('[ducats] Cycle complete.');
+      console.log(`[ducats] Error processing ${entry?.item?.slug ?? '?'}: ${message}`);
+    })
+  );
 }
 
-export function getDucatData(): { data: DucatEntry[]; ready: boolean } {
+export function getDucatData(): {
+  data: DucatEntry[];
+  ready: boolean;
+  lastCycleCompletedAt: string | null;
+} {
+  // Rows persist in the store until explicitly pruned (delisted /
+  // ineligible / below thresholds). We deliberately do NOT filter by age
+  // here: the hot sweep already prioritizes stale rows (oldest
+  // last_updated first), so old data is replaced by fresh data on the
+  // cycle's cadence rather than hidden behind a freshness threshold.
   const rows = [...store.ducats.values()]
-    .filter((entry) => isFresh(entry, config.maxDataAgeMs))
     .sort((a, b) => b.ducat_per_platinum - a.ducat_per_platinum);
 
-  return { data: rows, ready: store.ready.ducats };
+  return {
+    data: rows,
+    ready: store.ready.ducats,
+    lastCycleCompletedAt: store.lastCycleCompletedAt.ducats,
+  };
 }
