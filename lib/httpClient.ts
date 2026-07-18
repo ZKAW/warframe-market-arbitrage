@@ -34,12 +34,12 @@ function acquire(): Promise<void> {
     inflight++;
     return Promise.resolve();
   }
-  const { promise, resolve } = Promise.withResolvers<void>();
-  waiters.push(() => {
-    inflight++;
-    resolve();
+  return new Promise<void>((resolve) => {
+    waiters.push(() => {
+      inflight++;
+      resolve();
+    });
   });
-  return promise;
 }
 
 export async function safeGetRequest(

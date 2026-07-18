@@ -82,9 +82,7 @@ async function runPipelineLoopTwin(
       total++;
       concurrent++;
       maxConcurrent = Math.max(maxConcurrent, concurrent);
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 5);
-      await promise;
+      await new Promise<void>((resolve) => setTimeout(resolve, 5));
       concurrent--;
     }
   );
