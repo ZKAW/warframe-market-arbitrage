@@ -2,7 +2,6 @@ import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
 import { fetchPriceData, FETCH_FAILED } from './warframeApi';
-import { mapWithConcurrency, msUntilNextStale } from './scrape';
 import type { RequestCache } from './scrape';
 import type { DucatEntry } from './types';
 import type { PrimeEntry } from './store';
@@ -13,19 +12,18 @@ function removeDucatRow(slug: string): void {
   if (store.ducats.delete(slug)) broadcast('ducats', getDucatData());
 }
 
+// Fetch + evaluate ONE prime. Called by the persistent-stale-driven worker
+// pool in scrape.ts the moment this slug crosses hotRetryIntervalMs (or on
+// first-ever fetch). Every code path that exits either writes a fresh live
+// row, removes the row (delisted / below thresholds), or preserves the
+// prior row on transient failure - in all cases the caller bumps the
+// slug's deadline so the budget drives the queue for all catalog primes,
+// not just live-priced ones.
 async function processSingleItem(
   entry: PrimeEntry,
-  cache: RequestCache,
-  state: { didWork: boolean }
+  cache: RequestCache
 ): Promise<void> {
   const slug = entry.item.slug;
-  if (config.hotRetryIntervalMs > 0) {
-    const prev = store.ducats.get(slug)?.last_updated;
-    if (prev && Date.now() - new Date(prev).getTime() < config.hotRetryIntervalMs) {
-      return;
-    }
-  }
-  state.didWork = true;
   const ducats = entry.ducats;
   if (!ducats) {
     removeDucatRow(slug);
@@ -35,7 +33,7 @@ async function processSingleItem(
   const price = await fetchPriceData(slug, cache);
   if (price === FETCH_FAILED) {
     // Transient (429 past backoff / network). Preserve whatever the
-    // previous cycle had; defer to next cycle. Treat like a stale-read.
+    // previous cycle had; defer to next pass. Treat like a stale-read.
     console.log(`[ducats] Skipping ${slug}: price fetch failed (transient), keeping existing row`);
     return;
   }
@@ -65,46 +63,18 @@ async function processSingleItem(
   broadcast('ducats', getDucatData());
 }
 
-function pruneIneligibleItems(currentSlugs: Set<string>): void {
-  for (const slug of store.ducats.keys()) {
-    if (!currentSlugs.has(slug)) {
-      store.ducats.delete(slug);
-      console.log(`[ducats] Removed no-longer-eligible/delisted item: ${slug}`);
-      broadcast('ducats', getDucatData());
-    }
-  }
-}
-
-export async function runDucatCycle(cache: RequestCache): Promise<number> {
-  pruneIneligibleItems(new Set(store.catalog.primes.keys()));
-
-  // Sweep oldest-ducats-row first so stale rows get re-fetched before
-  // fresh ones within each cycle. Rows we've never priced yet sort ahead
-  // of everything (no last_updated => -Infinity) so newly-streamed
-  // catalog primes get their first price pass before any refresh work.
-  // Snapshot the primes: the cold build reassigns store.catalog.primes
-  // on completion, and iterating a Map replaced mid-sweep is
-  // unspecified. The snapshot is the exact set this cycle owes work for.
-  const work = [...store.catalog.primes.values()].sort((a, b) => {
-    const ta = store.ducats.get(a.item.slug)?.last_updated;
-    const tb = store.ducats.get(b.item.slug)?.last_updated;
-    const taMs = ta ? new Date(ta).getTime() : Number.NEGATIVE_INFINITY;
-    const tbMs = tb ? new Date(tb).getTime() : Number.NEGATIVE_INFINITY;
-    return taMs - tbMs;
+// Worker-pool entry point: fetch + evaluate one prime by slug. Caller
+// (runStaleDrivenLoop in scrape.ts) does claim tracking + deadline bumping.
+export async function processDucatSlug(
+  slug: string,
+  cache: RequestCache
+): Promise<void> {
+  const entry = store.catalog.primes.get(slug);
+  if (!entry) return;
+  await processSingleItem(entry, cache).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(`[ducats] Error processing ${slug}: ${message}`);
   });
-
-  const cycleState = { didWork: false };
-  await mapWithConcurrency(work, config.hotConcurrency, (entry) =>
-    processSingleItem(entry, cache, cycleState).catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.log(`[ducats] Error processing ${entry?.item?.slug ?? '?'}: ${message}`);
-    })
-  );
-
-  if (cycleState.didWork) return 0;
-  return msUntilNextStale(store.catalog.primes.keys(), (s) =>
-    store.ducats.get(s)?.last_updated
-  );
 }
 
 export function getDucatData(): {
@@ -113,10 +83,10 @@ export function getDucatData(): {
   lastCycleCompletedAt: string | null;
 } {
   // Rows persist in the store until explicitly pruned (delisted /
-  // ineligible / below thresholds). We deliberately do NOT filter by age
-  // here: the hot sweep already prioritizes stale rows (oldest
-  // last_updated first), so old data is replaced by fresh data on the
-  // cycle's cadence rather than hidden behind a freshness threshold.
+  // ineligible / below thresholds). We do NOT filter by age at render
+  // time: stale data is replaced by the persistent stale-driven worker
+  // pool's cadence (each row re-fetched on its hotRetryIntervalMs
+  // deadline) rather than hidden behind a freshness filter.
   const rows = [...store.ducats.values()]
     .sort((a, b) => b.ducat_per_platinum - a.ducat_per_platinum);
 

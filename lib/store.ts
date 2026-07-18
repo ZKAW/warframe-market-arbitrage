@@ -33,10 +33,10 @@ interface Store {
   ducats: Map<string, DucatEntry>;
   // Active scrape-loop cancellation tokens, one per pipeline ('arbitrage'
   // / 'ducats'). A token is cancelled whenever a new scrape loop supersedes
-  // it; the tick loop checks `cancelled` before scheduling the next cycle
-  // and before broadcasting, so a defunct tick chain from a hot-reloaded
-  // old module instance stops touching the store or the SSE stream.
-  // Namespaced by pipeline so two pipelines can be tracked independently.
+  // it; the workers check `cancelled` before fetching and before sleeping,
+  // so a defunct worker chain from a hot-reloaded module instance stops
+  // touching the store or the SSE stream. Namespaced by pipeline so two
+  // pipelines can be tracked independently.
   loopTokens: Map<'arbitrage' | 'ducats', { cancelled: boolean }>;
   // Cancellation token for the catalog-rebuild loop. Cancelled in
   // startScrapeLoop before minting a fresh one, same pattern as loopTokens.
@@ -58,6 +58,21 @@ interface Store {
   // store (same HMR reason as lastCycleCompletedAt). The hot loops read
   // this instead of re-deriving manifests/details every cycle.
   catalog: Catalog;
+  // Persistent-stale-driven worker-pool runtime state per hot pipeline.
+  // Survives HMR alongside the data it tracks.
+  //   deadlines: slug -> epoch ms when the row is next due for a refresh.
+  //     Absent = never fetched (sorted first, deadline = -Infinity).
+  //     Set to now+hotRetryIntervalMs by the worker after ANY fetch
+  //     outcome (profitable, pruned, transient-fail), so unprofitable
+  //     rows aren't re-evaluated every tick - the budget actually drives
+  //     the queue for ALL catalog rows, not just live-priced ones.
+  //   inFlight: slugs a worker has claimed this pass. Prevents two
+  //     workers from racing on the same soonest-deadline slug when
+  //     multiple become due simultaneously.
+  pipelineState: {
+    arbitrage: { deadlines: Map<string, number>; inFlight: Set<string> };
+    ducats: { deadlines: Map<string, number>; inFlight: Set<string> };
+  };
 }
 
 type GlobalWithStore = typeof globalThis & {
@@ -77,6 +92,10 @@ function initStore(): Store {
       ready: { arbitrage: false, ducats: false },
       lastCycleCompletedAt: { arbitrage: null, ducats: null },
       catalog: { sets: new Map(), primes: new Map(), builtAt: null },
+      pipelineState: {
+        arbitrage: { deadlines: new Map(), inFlight: new Set() },
+        ducats: { deadlines: new Map(), inFlight: new Set() },
+      },
     };
   }
   return g.__warframeMarketStore__;

@@ -1,7 +1,7 @@
 import { config } from './config';
 import { store } from './store';
-import { runArbitrageCycle, getArbitrageData } from './arbitrage';
-import { runDucatCycle, getDucatData } from './ducats';
+import { processArbitrageSlug, getArbitrageData } from './arbitrage';
+import { processDucatSlug, getDucatData } from './ducats';
 import { loadCatalog } from './catalog';
 import { safeGetRequest, FETCH_FAILED, type FetchFailed } from './httpClient';
 import { broadcast } from './subscriptions';
@@ -9,28 +9,56 @@ import { broadcast } from './subscriptions';
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-// Time until the soonest row in the catalog crosses the staleness budget.
-// Returns 0 if any row is unpriced (no last_updated) - those are always
-// picked up immediately by the oldest-first sort, so the loop should
-// re-tick right away. Returns the budget itself if the catalog is empty
-// (handled by the isEmpty branch in runPipelineLoop, but this is a safe
-// fallback). Used by the hot engines to sleep until real work exists
-// rather than busy-spinning over a fully-fresh catalog.
-export function msUntilNextStale<T>(
-  entries: Iterable<T>,
-  getLastUpdated: (item: T) => string | undefined
-): number {
+// Iterable over the live catalog slugs for `pipeline`. Hot loops must not
+// see slugs the catalog no longer knows about: rows whose backing entry
+// was pruned by a rebuild are gone from the map before we iterate, so a
+// deadline-only-known slug is naturally excluded here.
+function catalogIterator(pipeline: 'arbitrage' | 'ducats'): Iterable<string> {
+  return pipeline === 'arbitrage'
+    ? store.catalog.sets.keys()
+    : store.catalog.primes.keys();
+}
+
+// Pick the soonest-due slug that's currently claimable for `pipeline`:
+// a slug with no recorded deadline (never fetched) is immediately due.
+// Returns slug, or null if nothing is due right now. Concurrent workers
+// share the deadlines Map; the inFlight Set prevents two workers from
+// racing on the same slug when many become due simultaneously.
+function pickDueSlug(
+  pipeline: 'arbitrage' | 'ducats',
+  now: number
+): string | null {
+  const { deadlines, inFlight } = store.pipelineState[pipeline];
+  let due: string | null = null;
+  let dueDeadline = Number.POSITIVE_INFINITY;
+  for (const slug of catalogIterator(pipeline)) {
+    if (inFlight.has(slug)) continue;
+    const d = deadlines.get(slug) ?? Number.NEGATIVE_INFINITY;
+    if (d <= now && d <= dueDeadline) {
+      due = slug;
+      dueDeadline = d;
+    }
+  }
+  return due;
+}
+
+// Time until the soonest slug crosses the staleness budget. Only called
+// when pickDueSlug found nothing due now - so every catalog slug is
+// fresh-within-budget. Returns the budget as a safe floor if the catalog
+// is empty (the caller already gated on builtAt, but a defensive bound
+// beats a forever-sleep on a transient empty window).
+function msUntilNextDue(pipeline: 'arbitrage' | 'ducats'): number {
   if (config.hotRetryIntervalMs <= 0) return 0;
+  const { deadlines, inFlight } = store.pipelineState[pipeline];
   let earliest: number | null = null;
-  for (const entry of entries) {
-    const ts = getLastUpdated(entry);
-    if (!ts) return 0;
-    const age = Date.now() - new Date(ts).getTime();
-    earliest = earliest === null ? age : Math.min(earliest, age);
+  for (const slug of catalogIterator(pipeline)) {
+    if (inFlight.has(slug)) continue;
+    const d = deadlines.get(slug) ?? Number.NEGATIVE_INFINITY;
+    if (d === Number.NEGATIVE_INFINITY) return 0;
+    earliest = earliest === null ? d : Math.min(earliest, d);
   }
   if (earliest === null) return config.hotRetryIntervalMs;
-  const remaining = config.hotRetryIntervalMs - earliest;
-  return remaining <= 0 ? 0 : remaining;
+  return Math.max(0, earliest - Date.now());
 }
 
 export class RequestCache {
@@ -76,69 +104,87 @@ export async function mapWithConcurrency<T>(
   });
   await Promise.all(runners);
 }
-// Each pipeline runs as a continuous, stale-driven engine. The cycle body
-// (runArbitrageCycle / runDucatCycle) snapshots the catalog sorted by
-// last_updated ASC and feeds a worker pool. The staleness budget
-// hotRetryIntervalMs is enforced two ways: rows fresher than the budget
-// are SKIP-skipped by the worker (no fetch, no broadcast, no write), and
-// when a cycle completes without doing any work, the cycle returns the
-// ms-until the soonest row crosses the budget - the tick sleeps that long
-// rather than busy-spinning over a fully-fresh catalog. Rows we've never
-// priced yet sort ahead of everything (no last_updated => -Infinity) so
-// newly-streamed catalog entries always get their first price pass.
+// Each hot pipeline runs as a persistent stale-driven worker pool. N long-
+// lived workers perpetually pull the SINGLE soonest-due slug from the live
+// catalog, claim it, fetch it, and stamp a fresh deadline = now + budget.
+// This removes the cycle boundary: a slug that crosses staleness right now
+// is fetched within seconds, not at the next tick's snapshot. It also
+// makes hotRetryIntervalMs actually drive the queue for ALL catalog rows:
+// unprofitable rows previously had no last_updated so they sorted first on
+// every cycle and got re-evaluated forever; now every slug gets a deadline
+// and respects the budget.
 //
-// `isEmpty` is pipeline-specific: arbitrage waits on store.catalog.sets,
-// ducats on store.catalog.primes. When the catalog-mapping it cares about
-// is still empty (cold build hasn't streamed its first entry), tick sleeps
-// coldRetryMs so we don't CPU-spin on a no-op cycle.
+// The process-wide semaphore in httpClient.ts (maxConcurrentRequests) is
+// still the sole rate gate across all three pipelines (catalog + arb +
+// ducats); hotConcurrency here just bounds the per-pipeline worker count.
 //
-// The tick chain is cancellation-aware: it checks the token before each
-// scheduling step. `startScrapeLoop` cancels any prior token for the same
-// pipeline before minting a new one, so old tick chains from a hot-reloaded
+// Workers are cancellation-aware: they check the token before each claim
+// and before sleeping. startScrapeLoop cancels any prior token for the
+// same pipeline before minting a fresh one, so workers from a hot-reloaded
 // module instance stop touching the store instead of stacking up.
-function runPipelineLoop(
+function runStaleDrivenLoop(
   name: 'arbitrage' | 'ducats',
-  run: (cache: RequestCache) => Promise<number>,
-  markReady: () => void,
-  isEmpty: () => boolean
+  processSlug: (slug: string, cache: RequestCache) => Promise<void>,
+  markReady: () => void
 ): void {
   const token = { cancelled: false };
   store.loopTokens.set(name, token);
+  const { deadlines, inFlight } = store.pipelineState[name];
 
-  const tick = async (): Promise<void> => {
-    if (token.cancelled) return;
-    try {
-      if (isEmpty()) {
-        // Cold build hasn't streamed the first catalog entry for this
-        // pipeline yet. Sleep coldRetryMs and re-tick - bounded wait so
-        // we don't busy-spin on an empty cycle while the catalog streams.
-        setTimeout(tick, config.coldRetryMs);
-        return;
+  const worker = async (workerId: number): Promise<void> => {
+    while (!token.cancelled) {
+      // Cold-build gate: don't sweep until the first COMPLETED catalog
+      // build has landed. Mid-build streaming otherwise steals the
+      // shared rate-limit budget from the build and produces misleading
+      // partial-catalog sweeps. Steady-state rebuilds keep working
+      // (builtAt is always set past the first build); pruned slugs are
+      // naturally excluded because pickDueSlug only sees live catalog
+      // slugs, and the catalog-rebuild prune pass clears their deadlines.
+      if (store.catalog.builtAt === null) {
+        await sleep(config.coldRetryMs);
+        continue;
       }
-      console.log(`[${name}] Cycle started: ${new Date().toISOString()}`);
-      const cache = new RequestCache();
-      const delay = await run(cache);
-      if (token.cancelled) return;
-      markReady();
-      console.log(`[${name}] Cycle complete.`);
-      // delay = 0: cycle did real work (at least one fetch), re-tick
-      // immediately - more stale rows may be queued. delay > 0: every
-      // row is fresher than the staleness budget; sleep until the
-      // soonest one would go stale rather than busy-spinning. Sleeping
-      // here keeps the CPU idle and the SSE stream quiet while the data
-      // is still fresh; the semaphore + requestDelayMs still bound the
-      // rate whenever work flows.
-      setTimeout(tick, delay);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.log(`[${name}] Loop error: ${message}`);
-      // A thrown cycle is treated as "did work, schedule now" so a
-      // transient error doesn't stall the loop until the staleness timer.
-      if (!token.cancelled) setTimeout(tick, 0);
+
+      const slug = pickDueSlug(name, Date.now());
+      if (slug) {
+        inFlight.add(slug);
+        try {
+          const cache = new RequestCache();
+          await processSlug(slug, cache);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.log(`[${name}:${workerId}] Worker error on ${slug}: ${message}`);
+        } finally {
+          inFlight.delete(slug);
+        }
+        if (token.cancelled) return;
+        // Stamp a fresh deadline regardless of outcome (profitable,
+        // pruned, transient-fail). This is the key behavior that makes
+        // the budget drive the queue for unprofitable slugs too - the
+        // old cycle model would re-evaluate pruned rows on every pass
+        // because they had no last_updated. A subsequent catalog rebuild
+        // that drops this slug cleans up its deadline via the prune pass.
+        deadlines.set(slug, Date.now() + config.hotRetryIntervalMs);
+        markReady();
+        continue;
+      }
+
+      // Nothing due: sleep until the soonest deadline, then re-pick.
+      // Cap the sleep at coldRetryMs so a cancelled token is observed
+      // promptly and so newly-stale rows (catalog grew, deadline moved)
+      // are picked up without a full-budget wait.
+      const wait = msUntilNextDue(name);
+      if (wait <= 0) continue;
+      await sleep(Math.min(wait, config.coldRetryMs));
     }
   };
 
-  tick();
+  // Spin up the worker pool. Each worker is an independent loop; we never
+  // await Promise.all because runStaleDrivenLoop must return synchronously
+  // to startScrapeLoop. Workers run until token.cancelled.
+  for (let i = 0; i < config.hotConcurrency; i++) {
+    void worker(i);
+  }
 }
 
 // Cold loop: rebuilds the static catalog (sets + primes) on its own slow
@@ -192,26 +238,22 @@ export function startScrapeLoop(): void {
   store.ready.ducats = false;
 
   runCatalogLoop();
-  // The hot pipelines wait for the first COMPLETED catalog build before
-  // sweeping. During a cold build, store.catalog.sets/primes stream in
-  // progressively (catalog.ts writes the live map mid-build); without this
-  // gate the hot loops would wake on the first streamed entry, start
-  // fetching prices, and starve the cold build of the shared rate-limit
-  // budget - the cold build takes ~10min instead of ~2min, and the hot
-  // sweeps run against a partial catalog producing misleading "cycle
-  // complete" log lines. Once builtAt is set, steady-state rebuilds keep
-  // the streaming behavior: sweeps continue against the union of previous
-  // + new catalog entries while the rebuild populates, then the prune
-  // pass converges them.
-  const hotCatalogReady = () => store.catalog.builtAt !== null;
-  runPipelineLoop('arbitrage', runArbitrageCycle, () => {
+  // Each hot pipeline runs a persistent stale-driven worker pool (see
+  // runStaleDrivenLoop). The builtAt gate inside the workers keeps them
+  // dormant until the first complete catalog build - mid-build streaming
+  // otherwise steals rate-limit budget from the build. After the first
+  // build, workers pull stalest-due slugs continuously and stamp fresh
+  // deadlines, so hotRetryIntervalMs actually drives the queue for every
+  // catalog row including unprofitable ones, instead of being aspirational
+  // documentation over a 240-row sweep wall-clock.
+  runStaleDrivenLoop('arbitrage', processArbitrageSlug, () => {
     store.ready.arbitrage = true;
     store.lastCycleCompletedAt.arbitrage = new Date().toISOString();
     broadcast('arbitrage', getArbitrageData());
-  }, () => !hotCatalogReady() || store.catalog.sets.size === 0);
-  runPipelineLoop('ducats', runDucatCycle, () => {
+  });
+  runStaleDrivenLoop('ducats', processDucatSlug, () => {
     store.ready.ducats = true;
     store.lastCycleCompletedAt.ducats = new Date().toISOString();
     broadcast('ducats', getDucatData());
-  }, () => !hotCatalogReady() || store.catalog.primes.size === 0);
+  });
 }

@@ -145,12 +145,24 @@ export async function loadCatalog(cache: RequestCache): Promise<void> {
   store.catalog.primes = newPrimes;
   // Also drop any arbitrage/ducats rows whose backing catalog entry was
   // pruned; otherwise the table would keep showing rows for delisted sets
-  // the next arbitrage cycle no longer knows about.
+  // the next hot worker no longer knows about. Clean up the deadline Map
+  // too so the stale-driven worker pool doesn't carry entries for slugs
+  // that no longer have a catalog row (no functional harm - pickDueSlug
+  // only looks up deadlines for slugs from catalogIterator - but it'd
+  // leak memory across many rebuilds).
+  const arbDeadlines = store.pipelineState.arbitrage.deadlines;
   for (const slug of [...store.arbitrage.keys()]) {
-    if (!newSets.has(slug)) store.arbitrage.delete(slug);
+    if (!newSets.has(slug)) {
+      store.arbitrage.delete(slug);
+      arbDeadlines.delete(slug);
+    }
   }
+  const ducDeadlines = store.pipelineState.ducats.deadlines;
   for (const slug of [...store.ducats.keys()]) {
-    if (!newPrimes.has(slug)) store.ducats.delete(slug);
+    if (!newPrimes.has(slug)) {
+      store.ducats.delete(slug);
+      ducDeadlines.delete(slug);
+    }
   }
 
   store.catalog.builtAt = new Date().toISOString();

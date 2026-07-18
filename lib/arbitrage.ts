@@ -2,7 +2,6 @@ import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
 import { fetchPriceData, fetchStatisticsVolume, FETCH_FAILED } from './warframeApi';
-import { mapWithConcurrency, msUntilNextStale } from './scrape';
 import type { RequestCache } from './scrape';
 import type { ArbitrageEntry } from './types';
 import type { SetEntry } from './store';
@@ -16,19 +15,19 @@ function removeArbitrageRow(slug: string): void {
   if (store.arbitrage.delete(slug)) broadcast('arbitrage', getArbitrageData());
 }
 
+// Fetch + evaluate ONE set. Called by the persistent-stale-driven worker
+// pool in scrape.ts the moment this slug crosses hotRetryIntervalMs (or on
+// first-ever fetch - absent deadlines sort first). Every code path that
+// exits returns either a fresh live row, no row (delisted / unprofitable
+// / low-volume), or preserves the prior row on transient failure - in all
+// cases the caller bumps the slug's deadline so the budget drives the
+// queue even for rows we decided to drop, instead of re-evaluating them
+// every tick.
 async function processSingleSet(
   entry: SetEntry,
-  cache: RequestCache,
-  state: { didWork: boolean }
+  cache: RequestCache
 ): Promise<void> {
   const setSlug = entry.setItem.slug;
-  if (config.hotRetryIntervalMs > 0) {
-    const prev = store.arbitrage.get(setSlug)?.last_updated;
-    if (prev && Date.now() - new Date(prev).getTime() < config.hotRetryIntervalMs) {
-      return;
-    }
-  }
-  state.didWork = true;
   const components = entry.components;
   let setPrice: number | FetchFailed | null = null;
   let totalPartsCost = 0;
@@ -37,7 +36,7 @@ async function processSingleSet(
   // (404 or zero live orders) - we trust that signal and drop the row. A
   // transient FETCH_FAILED (429 past backoff, network blip) is NOT a
   // removal signal: keep the existing row untouched, skip this cycle's
-  // update, and let the next cycle try again with fresh rate budget.
+  // update, and let the next pass try again with fresh rate budget.
   let transientFailure = false;
 
   for (const { slug, quantity = 1 } of components) {
@@ -109,48 +108,22 @@ async function processSingleSet(
   broadcast('arbitrage', getArbitrageData());
 }
 
-function pruneDelistedSets(currentSlugs: Set<string>): void {
-  for (const slug of store.arbitrage.keys()) {
-    if (!currentSlugs.has(slug)) {
-      store.arbitrage.delete(slug);
-      console.log(`[arbitrage] Removed delisted/renamed set: ${slug}`);
-      broadcast('arbitrage', getArbitrageData());
-    }
-  }
-}
-
-export async function runArbitrageCycle(cache: RequestCache): Promise<number> {
-  pruneDelistedSets(new Set(store.catalog.sets.keys()));
-
-  // Sweep oldest-arbitrage-row first so stale rows get re-fetched before
-  // fresh ones within each cycle. Rows we've never priced yet sort ahead
-  // of everything (no last_updated => -Infinity) so newly-streamed
-  // catalog sets get their first price pass before any refresh work.
-  // Snapshot the catalog entries: the cold build streams sets into
-  // store.catalog.sets mid-sweep, and iterating a Map while it's being
-  // written from another coroutine is unspecified. The snapshot is the
-  // exact set this cycle owes work for; anything added after the snapshot
-  // waits for the next tick.
-  const work = [...store.catalog.sets.values()].sort((a, b) => {
-    const ta = store.arbitrage.get(a.setItem.slug)?.last_updated;
-    const tb = store.arbitrage.get(b.setItem.slug)?.last_updated;
-    const taMs = ta ? new Date(ta).getTime() : Number.NEGATIVE_INFINITY;
-    const tbMs = tb ? new Date(tb).getTime() : Number.NEGATIVE_INFINITY;
-    return taMs - tbMs;
+// Worker-pool entry point: fetch + evaluate one set by slug. The caller
+// (runStaleDrivenLoop in scrape.ts) is responsible for claim tracking and
+// deadline bumping - this fn just does the row lifecycle. Looks the entry
+// up from the live catalog; if the catalog was rebuilt and the slug no
+// longer exists, this is a no-op (the prune pass in catalog.ts already
+// cleaned up).
+export async function processArbitrageSlug(
+  slug: string,
+  cache: RequestCache
+): Promise<void> {
+  const entry = store.catalog.sets.get(slug);
+  if (!entry) return;
+  await processSingleSet(entry, cache).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(`[arbitrage] Error processing ${slug}: ${message}`);
   });
-
-  const cycleState = { didWork: false };
-  await mapWithConcurrency(work, config.hotConcurrency, (entry) =>
-    processSingleSet(entry, cache, cycleState).catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.log(`[arbitrage] Error processing ${entry?.setItem?.slug ?? '?'}: ${message}`);
-    })
-  );
-
-  if (cycleState.didWork) return 0;
-  return msUntilNextStale(store.catalog.sets.keys(), (s) =>
-    store.arbitrage.get(s)?.last_updated
-  );
 }
 
 
@@ -160,11 +133,11 @@ export function getArbitrageData(): {
   lastCycleCompletedAt: string | null;
 } {
   // Rows persist in the store until explicitly pruned (delisted,
- // unprofitable, low-volume). We deliberately do NOT filter by age here:
- // the hot sweep already prioritizes stale rows (oldest last_updated
- // first), so old data is replaced by fresh data on the cycle's cadence
- // rather than hidden behind a freshness threshold. Pruning belongs to
- // the lifecycle in arbitrage.ts, not to a render-time filter.
+  // unprofitable, low-volume). We do NOT filter by age at render time:
+  // stale data is replaced by the persistent stale-driven worker pool's
+  // cadence (each row re-fetched on its hotRetryIntervalMs deadline)
+  // rather than hidden behind a freshness filter. Pruning belongs to the
+  // row lifecycle here, not to a render-time filter.
   const rows = [...store.arbitrage.values()]
     .sort((a, b) => b.arbitrage_value - a.arbitrage_value);
 
