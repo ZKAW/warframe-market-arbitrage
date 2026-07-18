@@ -6,9 +6,9 @@ filters:
   # Arbitrage: minimum 48h closed-trade volume for a set to show.
   minVolume: 2
   # Ducats: minimum ducat-per-platinum ratio to show an item.
-  minDucatPerPlatinum: 0
+  minDucatPerPlatinum: 10
   # Ducats: minimum ducat value to show an item.
-  minDucats: 0
+  minDucats: 15
 
 rateLimit:
   # Process-wide cap on simultaneous in-flight warframe.market fetches (burst).
