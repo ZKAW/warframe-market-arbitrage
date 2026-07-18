@@ -1,11 +1,12 @@
 import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
-import { fetchPriceData, fetchStatisticsVolume } from './warframeApi';
-import { mapWithConcurrency } from './scrape';
+import { fetchPriceData, fetchStatisticsVolume, FETCH_FAILED } from './warframeApi';
+import { mapWithConcurrency, msUntilNextStale } from './scrape';
 import type { RequestCache } from './scrape';
 import type { ArbitrageEntry } from './types';
 import type { SetEntry } from './store';
+import type { FetchFailed } from './httpClient';
 
 
 // Delete + broadcast. Pruning an arbitrage row only matters if the slug
@@ -17,28 +18,38 @@ function removeArbitrageRow(slug: string): void {
 
 async function processSingleSet(
   entry: SetEntry,
-  cache: RequestCache
+  cache: RequestCache,
+  state: { didWork: boolean }
 ): Promise<void> {
   const setSlug = entry.setItem.slug;
   if (config.hotRetryIntervalMs > 0) {
     const prev = store.arbitrage.get(setSlug)?.last_updated;
-    if (prev) {
-      const ageMs = Date.now() - new Date(prev).getTime();
-      if (ageMs > config.hotRetryIntervalMs) {
-        console.log(`[arbitrage] Refreshing stale row ${setSlug} (${Math.round(ageMs / 1000)}s over budget)`);
-      }
+    if (prev && Date.now() - new Date(prev).getTime() < config.hotRetryIntervalMs) {
+      return;
     }
   }
+  state.didWork = true;
   const components = entry.components;
-  let setPrice: number | null = null;
+  let setPrice: number | FetchFailed | null = null;
   let totalPartsCost = 0;
   let incomplete = false;
+  // True only on a real "this part has no sell orders / was delisted" null
+  // (404 or zero live orders) - we trust that signal and drop the row. A
+  // transient FETCH_FAILED (429 past backoff, network blip) is NOT a
+  // removal signal: keep the existing row untouched, skip this cycle's
+  // update, and let the next cycle try again with fresh rate budget.
+  let transientFailure = false;
 
   for (const { slug, quantity = 1 } of components) {
     if (slug === setSlug) {
       setPrice = await fetchPriceData(slug, cache);
+      if (setPrice === FETCH_FAILED) transientFailure = true;
     } else {
       const price = await fetchPriceData(slug, cache);
+      if (price === FETCH_FAILED) {
+        transientFailure = true;
+        break;
+      }
       if (price == null) {
         incomplete = true;
         break;
@@ -47,7 +58,13 @@ async function processSingleSet(
     }
   }
 
-  if (incomplete || !setPrice) {
+  if (transientFailure) {
+    // Don't write, don't delete - preserve whatever the previous cycle
+    // already had. The arbiter only mutates on a confident signal.
+    console.log(`[arbitrage] Skipping ${setSlug}: price fetch failed (transient), keeping existing row`);
+    return;
+  }
+  if (setPrice === FETCH_FAILED || incomplete || !setPrice) {
     removeArbitrageRow(setSlug);
     return;
   }
@@ -102,7 +119,7 @@ function pruneDelistedSets(currentSlugs: Set<string>): void {
   }
 }
 
-export async function runArbitrageCycle(cache: RequestCache): Promise<void> {
+export async function runArbitrageCycle(cache: RequestCache): Promise<number> {
   pruneDelistedSets(new Set(store.catalog.sets.keys()));
 
   // Sweep oldest-arbitrage-row first so stale rows get re-fetched before
@@ -122,11 +139,17 @@ export async function runArbitrageCycle(cache: RequestCache): Promise<void> {
     return taMs - tbMs;
   });
 
+  const cycleState = { didWork: false };
   await mapWithConcurrency(work, config.hotConcurrency, (entry) =>
-    processSingleSet(entry, cache).catch((err) => {
+    processSingleSet(entry, cache, cycleState).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.log(`[arbitrage] Error processing ${entry?.setItem?.slug ?? '?'}: ${message}`);
     })
+  );
+
+  if (cycleState.didWork) return 0;
+  return msUntilNextStale(store.catalog.sets.keys(), (s) =>
+    store.arbitrage.get(s)?.last_updated
   );
 }
 

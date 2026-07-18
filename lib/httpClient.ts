@@ -4,6 +4,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Sentinel returned by safeGetRequest when every retry attempt fails (429
+// past the backoff cap, unexpected 5xx, network blip). Distinct from a
+// legitimate null (HTTP 404 / permanently absent) so callers can choose to
+ // keep an existing row instead of wiping good data on a transient outage.
+export const FETCH_FAILED = Symbol('FETCH_FAILED');
+export type FetchFailed = typeof FETCH_FAILED;
+
 const HEADERS = {
   Language: 'en',
   Platform: 'pc',
@@ -45,7 +52,7 @@ function acquire(): Promise<void> {
 export async function safeGetRequest(
   url: string,
   { retries = 5 }: { retries?: number } = {}
-): Promise<Response | null> {
+): Promise<Response | FetchFailed | null> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     await acquire();
     try {
@@ -80,5 +87,5 @@ export async function safeGetRequest(
     }
   }
 
-  return null;
+  return FETCH_FAILED;
 }

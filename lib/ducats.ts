@@ -1,8 +1,8 @@
 import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
-import { fetchPriceData } from './warframeApi';
-import { mapWithConcurrency } from './scrape';
+import { fetchPriceData, FETCH_FAILED } from './warframeApi';
+import { mapWithConcurrency, msUntilNextStale } from './scrape';
 import type { RequestCache } from './scrape';
 import type { DucatEntry } from './types';
 import type { PrimeEntry } from './store';
@@ -15,18 +15,17 @@ function removeDucatRow(slug: string): void {
 
 async function processSingleItem(
   entry: PrimeEntry,
-  cache: RequestCache
+  cache: RequestCache,
+  state: { didWork: boolean }
 ): Promise<void> {
   const slug = entry.item.slug;
   if (config.hotRetryIntervalMs > 0) {
     const prev = store.ducats.get(slug)?.last_updated;
-    if (prev) {
-      const ageMs = Date.now() - new Date(prev).getTime();
-      if (ageMs > config.hotRetryIntervalMs) {
-        console.log(`[ducats] Refreshing stale row ${slug} (${Math.round(ageMs / 1000)}s over budget)`);
-      }
+    if (prev && Date.now() - new Date(prev).getTime() < config.hotRetryIntervalMs) {
+      return;
     }
   }
+  state.didWork = true;
   const ducats = entry.ducats;
   if (!ducats) {
     removeDucatRow(slug);
@@ -34,6 +33,12 @@ async function processSingleItem(
   }
 
   const price = await fetchPriceData(slug, cache);
+  if (price === FETCH_FAILED) {
+    // Transient (429 past backoff / network). Preserve whatever the
+    // previous cycle had; defer to next cycle. Treat like a stale-read.
+    console.log(`[ducats] Skipping ${slug}: price fetch failed (transient), keeping existing row`);
+    return;
+  }
   if (!price || price <= 0) {
     removeDucatRow(slug);
     return;
@@ -70,7 +75,7 @@ function pruneIneligibleItems(currentSlugs: Set<string>): void {
   }
 }
 
-export async function runDucatCycle(cache: RequestCache): Promise<void> {
+export async function runDucatCycle(cache: RequestCache): Promise<number> {
   pruneIneligibleItems(new Set(store.catalog.primes.keys()));
 
   // Sweep oldest-ducats-row first so stale rows get re-fetched before
@@ -88,11 +93,17 @@ export async function runDucatCycle(cache: RequestCache): Promise<void> {
     return taMs - tbMs;
   });
 
+  const cycleState = { didWork: false };
   await mapWithConcurrency(work, config.hotConcurrency, (entry) =>
-    processSingleItem(entry, cache).catch((err) => {
+    processSingleItem(entry, cache, cycleState).catch((err) => {
       const message = err instanceof Error ? err.message : String(err);
       console.log(`[ducats] Error processing ${entry?.item?.slug ?? '?'}: ${message}`);
     })
+  );
+
+  if (cycleState.didWork) return 0;
+  return msUntilNextStale(store.catalog.primes.keys(), (s) =>
+    store.ducats.get(s)?.last_updated
   );
 }
 

@@ -3,18 +3,41 @@ import { store } from './store';
 import { runArbitrageCycle, getArbitrageData } from './arbitrage';
 import { runDucatCycle, getDucatData } from './ducats';
 import { loadCatalog } from './catalog';
-import { safeGetRequest } from './httpClient';
+import { safeGetRequest, FETCH_FAILED, type FetchFailed } from './httpClient';
 import { broadcast } from './subscriptions';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+// Time until the soonest row in the catalog crosses the staleness budget.
+// Returns 0 if any row is unpriced (no last_updated) - those are always
+// picked up immediately by the oldest-first sort, so the loop should
+// re-tick right away. Returns the budget itself if the catalog is empty
+// (handled by the isEmpty branch in runPipelineLoop, but this is a safe
+// fallback). Used by the hot engines to sleep until real work exists
+// rather than busy-spinning over a fully-fresh catalog.
+export function msUntilNextStale<T>(
+  entries: Iterable<T>,
+  getLastUpdated: (item: T) => string | undefined
+): number {
+  if (config.hotRetryIntervalMs <= 0) return 0;
+  let earliest: number | null = null;
+  for (const entry of entries) {
+    const ts = getLastUpdated(entry);
+    if (!ts) return 0;
+    const age = Date.now() - new Date(ts).getTime();
+    earliest = earliest === null ? age : Math.min(earliest, age);
+  }
+  if (earliest === null) return config.hotRetryIntervalMs;
+  const remaining = config.hotRetryIntervalMs - earliest;
+  return remaining <= 0 ? 0 : remaining;
+}
 
 export class RequestCache {
-  private readonly pending = new Map<string, Promise<Response | null>>();
+  private readonly pending = new Map<string, Promise<Response | FetchFailed | null>>();
   private readonly json = new Map<string, Promise<unknown>>();
 
-  response(url: string): Promise<Response | null> {
+  response(url: string): Promise<Response | FetchFailed | null> {
     let p = this.pending.get(url);
     if (!p) {
       p = safeGetRequest(url);
@@ -23,14 +46,17 @@ export class RequestCache {
     return p;
   }
 
-  async jsonOf<T>(url: string): Promise<T | null> {
+  async jsonOf<T>(url: string): Promise<T | FetchFailed | null> {
     let p = this.json.get(url);
     if (!p) {
-      p = this.response(url).then((res) => (res ? res.json() : null));
+      p = this.response(url).then((res) =>
+        res === FETCH_FAILED || res === null ? res : res.json().catch(() => null)
+      );
       this.json.set(url, p);
     }
-    return (await p) as T | null;
+    return (await p) as T | FetchFailed | null;
   }
+
 }
 // Worker pool pulling from a shared queue. concurrency caps peak in-flight
 // requests per sweep; the per-request throttle in httpClient stays the sole
@@ -50,16 +76,16 @@ export async function mapWithConcurrency<T>(
   });
   await Promise.all(runners);
 }
-// Each pipeline runs as a continuous, stale-driven engine (no sleep timer)
-// instead of the old "sweep everything then sleep hotRetryInterval" tick.
-// The cycle body itself (runArbitrageCycle / runDucatCycle) snapshots the
-// catalog sorted by last_updated ASC and feeds a worker pool; the cycle
-// completes when the pool drains, then immediately ticks again. The oldest
-// row is always what the next free worker pulls, so a row that went stale
-// during the previous cycle is the first thing re-fetched next cycle - no
-// fixed inter-tick wait. The process-wide semaphore in httpClient.ts is the
-// lone rate gate; hotRetryIntervalMs now means "staleness budget" (used for
-// warning logs and as the implicit priority signal) rather than a sleep.
+// Each pipeline runs as a continuous, stale-driven engine. The cycle body
+// (runArbitrageCycle / runDucatCycle) snapshots the catalog sorted by
+// last_updated ASC and feeds a worker pool. The staleness budget
+// hotRetryIntervalMs is enforced two ways: rows fresher than the budget
+// are SKIP-skipped by the worker (no fetch, no broadcast, no write), and
+// when a cycle completes without doing any work, the cycle returns the
+// ms-until the soonest row crosses the budget - the tick sleeps that long
+// rather than busy-spinning over a fully-fresh catalog. Rows we've never
+// priced yet sort ahead of everything (no last_updated => -Infinity) so
+// newly-streamed catalog entries always get their first price pass.
 //
 // `isEmpty` is pipeline-specific: arbitrage waits on store.catalog.sets,
 // ducats on store.catalog.primes. When the catalog-mapping it cares about
@@ -72,7 +98,7 @@ export async function mapWithConcurrency<T>(
 // module instance stop touching the store instead of stacking up.
 function runPipelineLoop(
   name: 'arbitrage' | 'ducats',
-  run: (cache: RequestCache) => Promise<void>,
+  run: (cache: RequestCache) => Promise<number>,
   markReady: () => void,
   isEmpty: () => boolean
 ): void {
@@ -91,19 +117,25 @@ function runPipelineLoop(
       }
       console.log(`[${name}] Cycle started: ${new Date().toISOString()}`);
       const cache = new RequestCache();
-      await run(cache);
+      const delay = await run(cache);
       if (token.cancelled) return;
       markReady();
       console.log(`[${name}] Cycle complete.`);
+      // delay = 0: cycle did real work (at least one fetch), re-tick
+      // immediately - more stale rows may be queued. delay > 0: every
+      // row is fresher than the staleness budget; sleep until the
+      // soonest one would go stale rather than busy-spinning. Sleeping
+      // here keeps the CPU idle and the SSE stream quiet while the data
+      // is still fresh; the semaphore + requestDelayMs still bound the
+      // rate whenever work flows.
+      setTimeout(tick, delay);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.log(`[${name}] Loop error: ${message}`);
+      // A thrown cycle is treated as "did work, schedule now" so a
+      // transient error doesn't stall the loop until the staleness timer.
+      if (!token.cancelled) setTimeout(tick, 0);
     }
-    if (token.cancelled) return;
-    // Cycle drained - re-tick immediately. The semaphore + requestDelayMs
-    // bound the actual downstream rate; sleeping here would only drive the
-    // oldest-row staleness higher with no rate-limit benefit.
-    tick();
   };
 
   tick();
@@ -160,14 +192,26 @@ export function startScrapeLoop(): void {
   store.ready.ducats = false;
 
   runCatalogLoop();
+  // The hot pipelines wait for the first COMPLETED catalog build before
+  // sweeping. During a cold build, store.catalog.sets/primes stream in
+  // progressively (catalog.ts writes the live map mid-build); without this
+  // gate the hot loops would wake on the first streamed entry, start
+  // fetching prices, and starve the cold build of the shared rate-limit
+  // budget - the cold build takes ~10min instead of ~2min, and the hot
+  // sweeps run against a partial catalog producing misleading "cycle
+  // complete" log lines. Once builtAt is set, steady-state rebuilds keep
+  // the streaming behavior: sweeps continue against the union of previous
+  // + new catalog entries while the rebuild populates, then the prune
+  // pass converges them.
+  const hotCatalogReady = () => store.catalog.builtAt !== null;
   runPipelineLoop('arbitrage', runArbitrageCycle, () => {
     store.ready.arbitrage = true;
     store.lastCycleCompletedAt.arbitrage = new Date().toISOString();
     broadcast('arbitrage', getArbitrageData());
-  }, () => store.catalog.sets.size === 0);
+  }, () => !hotCatalogReady() || store.catalog.sets.size === 0);
   runPipelineLoop('ducats', runDucatCycle, () => {
     store.ready.ducats = true;
     store.lastCycleCompletedAt.ducats = new Date().toISOString();
     broadcast('ducats', getDucatData());
-  }, () => store.catalog.primes.size === 0);
+  }, () => !hotCatalogReady() || store.catalog.primes.size === 0);
 }
