@@ -18,19 +18,26 @@ export const config = {
   // All loops (catalog build + arbitrage + ducats sweeps) funnel through one
   // semaphore in httpClient.ts sized to this, so their HOT_CONCURRENCY /
   // CATALOG_CONCURRENCY worker pools can never stack beyond this many
-  // concurrent downstream requests. Default 2 stays under warframe.market's
-  // measured ~3 req/s ceiling; requestDelayMs is the sustained-rate gate,
-  // this is just the burst cap. Raise cautiously.
-  maxConcurrentRequests: num(process.env.MAX_CONCURRENT_REQUESTS, 2),
+  // concurrent downstream requests. requestDelayMs is the sustained-rate
+  // gate; this is the burst cap. Default 3 keeps a ~240-row sweep under
+  // ~3-4 min at 0.75s/req (closer to the hotRetryIntervalMs staleness
+  // budget) without storming 429s; measured ceiling on warframe.market is
+  // ~3 req/s sustained before backoffs dominate. Raise cautiously.
+  maxConcurrentRequests: num(process.env.MAX_CONCURRENT_REQUESTS, 3),
   // Delay after each successful request, seconds (matches old REQUEST_DELAY)
   requestDelayMs: num(process.env.REQUEST_DELAY, 0.35) * 1000,
 
   // Wait time after a 429, seconds (matches old RATE_LIMIT_DELAY)
   rateLimitDelayMs: num(process.env.RATE_LIMIT_DELAY, 10) * 1000,
 
-  // Time between full scrape cycles, seconds (matches old RETRY_INTERVAL)
-  retryIntervalMs: num(process.env.RETRY_INTERVAL, 600) * 1000,
-  // Hot-loop: time between price/volume sweeps, seconds.
+  // Hot-loop staleness budget, seconds. Under the continuous hot engine,
+  // hotRetryIntervalMs is no longer a sleep timer - the loop pulls the
+  // oldest row over and over without sleeping. This value instead defines
+  // "how stale is too stale": rows whose last_updated is older than this
+  // get re-fetched first (oldest-first queue ordering) and surface a
+  // warning log when a worker picks them up PAST the budget. Effective
+  // per-row freshness still can't beat the sweep wall-clock divided by
+  // maxConcurrentRequests, which is the structural limit.
   hotRetryIntervalMs: num(process.env.HOT_RETRY_INTERVAL, 120) * 1000,
   // Hot-loop: max sets/prime entries processed in parallel within one sweep.
   // warframe.market rate-limits aggressively - measured tolerable sustained

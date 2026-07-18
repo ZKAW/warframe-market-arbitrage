@@ -18,6 +18,15 @@ async function processSingleItem(
   cache: RequestCache
 ): Promise<void> {
   const slug = entry.item.slug;
+  if (config.hotRetryIntervalMs > 0) {
+    const prev = store.ducats.get(slug)?.last_updated;
+    if (prev) {
+      const ageMs = Date.now() - new Date(prev).getTime();
+      if (ageMs > config.hotRetryIntervalMs) {
+        console.log(`[ducats] Refreshing stale row ${slug} (${Math.round(ageMs / 1000)}s over budget)`);
+      }
+    }
+  }
   const ducats = entry.ducats;
   if (!ducats) {
     removeDucatRow(slug);

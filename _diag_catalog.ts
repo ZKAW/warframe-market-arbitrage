@@ -1,8 +1,20 @@
+// Pin thresholds to the values the stub fixtures below assume. bun auto-loads
+// .env.local before the script body runs, so an unrelated
+// MIN_DUCAT_PER_PLATINUM=20 sitting in a working copy would silently break
+// the ducats count assertion. config.ts captures env values into a plain
+// mutable object at module load, so we overwrite them here, before any cycle
+// reads them.
 import { loadCatalog } from './lib/catalog';
 import { runArbitrageCycle, getArbitrageData } from './lib/arbitrage';
 import { runDucatCycle, getDucatData } from './lib/ducats';
 import { store } from './lib/store';
 import { RequestCache } from './lib/scrape';
+import { config } from './lib/config';
+
+config.minArbitrageValue = 0;
+config.minVolume = 0;
+config.minDucatPerPlatinum = 0;
+config.minDucats = 0;
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) {

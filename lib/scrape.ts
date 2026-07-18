@@ -50,24 +50,31 @@ export async function mapWithConcurrency<T>(
   });
   await Promise.all(runners);
 }
-// Each pipeline gets its own independent tick. Arbitrage walks every "_set"
-// plus every component (price + volume per item, after the cold catalog
-// build pre-resolved manifests+part UIDs), which takes far longer than one
-// hot retry interval on a big catalog. Ducats only touches prime items
-// directly and finishes much faster. Separate timers mean ducats refreshes
-// on its own steady cadence no matter how long arbitrage's tail takes,
-// and the hot tick starts sweeping the moment the cold build streams the
-// first set into store.catalog.sets (no builtAt gate; size==0 only).
+// Each pipeline runs as a continuous, stale-driven engine (no sleep timer)
+// instead of the old "sweep everything then sleep hotRetryInterval" tick.
+// The cycle body itself (runArbitrageCycle / runDucatCycle) snapshots the
+// catalog sorted by last_updated ASC and feeds a worker pool; the cycle
+// completes when the pool drains, then immediately ticks again. The oldest
+// row is always what the next free worker pulls, so a row that went stale
+// during the previous cycle is the first thing re-fetched next cycle - no
+// fixed inter-tick wait. The process-wide semaphore in httpClient.ts is the
+// lone rate gate; hotRetryIntervalMs now means "staleness budget" (used for
+// warning logs and as the implicit priority signal) rather than a sleep.
 //
-// The tick chain is cancellation-aware: it checks a token before scheduling
-// the next cycle and before broadcasting. `startScrapeLoop` cancels any prior
-// token for the same pipeline before minting a new one, so old tick chains
-// left over from a hot-reloaded module instance stop touching the store
-// instead of stacking up as duplicates.
+// `isEmpty` is pipeline-specific: arbitrage waits on store.catalog.sets,
+// ducats on store.catalog.primes. When the catalog-mapping it cares about
+// is still empty (cold build hasn't streamed its first entry), tick sleeps
+// coldRetryMs so we don't CPU-spin on a no-op cycle.
+//
+// The tick chain is cancellation-aware: it checks the token before each
+// scheduling step. `startScrapeLoop` cancels any prior token for the same
+// pipeline before minting a new one, so old tick chains from a hot-reloaded
+// module instance stop touching the store instead of stacking up.
 function runPipelineLoop(
   name: 'arbitrage' | 'ducats',
   run: (cache: RequestCache) => Promise<void>,
-  markReady: () => void
+  markReady: () => void,
+  isEmpty: () => boolean
 ): void {
   const token = { cancelled: false };
   store.loopTokens.set(name, token);
@@ -75,36 +82,39 @@ function runPipelineLoop(
   const tick = async (): Promise<void> => {
     if (token.cancelled) return;
     try {
-      console.log(`[${name}] Cycle started: ${new Date().toISOString()}`);
-      if (store.catalog.sets.size === 0) {
-        // Catalog hasn't streamed its first set yet. The cold build adds
-        // sets to store.catalog.sets as they resolve, so the moment one
-        // lands the next tick starts sweeping - no waiting on a full
-        // 240-set build to finish.
-        console.log(`[${name}] No catalog sets yet; hot cycle skipped.`);
-      } else {
-        const cache = new RequestCache();
-        await run(cache);
-        if (token.cancelled) return;
-        markReady();
-        console.log(`[${name}] Cycle complete.`);
+      if (isEmpty()) {
+        // Cold build hasn't streamed the first catalog entry for this
+        // pipeline yet. Sleep coldRetryMs and re-tick - bounded wait so
+        // we don't busy-spin on an empty cycle while the catalog streams.
+        setTimeout(tick, config.coldRetryMs);
+        return;
       }
+      console.log(`[${name}] Cycle started: ${new Date().toISOString()}`);
+      const cache = new RequestCache();
+      await run(cache);
+      if (token.cancelled) return;
+      markReady();
+      console.log(`[${name}] Cycle complete.`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.log(`[${name}] Loop error: ${message}`);
     }
     if (token.cancelled) return;
-    setTimeout(tick, config.hotRetryIntervalMs);
+    // Cycle drained - re-tick immediately. The semaphore + requestDelayMs
+    // bound the actual downstream rate; sleeping here would only drive the
+    // oldest-row staleness higher with no rate-limit benefit.
+    tick();
   };
 
   tick();
 }
 
 // Cold loop: rebuilds the static catalog (sets + primes) on its own slow
-// timer, separate from the hot price-refresh loops. Its own RequestCache per
-// build dedupes the one-time manifest/details fetches within that build. The
-// hot loops no-op while store.catalog.builtAt is null, so kicking this first
-// in startScrapeLoop doesn't race the catalog against a hot tick.
+// timer, separate from the continuous hot price-refresh engines. Its own
+// RequestCache per build dedupes the one-time manifest/details fetches
+// within that build. The hot engines sleep coldRetryMs while their catalog
+// mapping is empty, so kicking this first in startScrapeLoop doesn't race
+// the catalog against a hot tick.
 function runCatalogLoop(): void {
   const token = { cancelled: false };
   store.catalogToken = token;
@@ -154,10 +164,10 @@ export function startScrapeLoop(): void {
     store.ready.arbitrage = true;
     store.lastCycleCompletedAt.arbitrage = new Date().toISOString();
     broadcast('arbitrage', getArbitrageData());
-  });
+  }, () => store.catalog.sets.size === 0);
   runPipelineLoop('ducats', runDucatCycle, () => {
     store.ready.ducats = true;
     store.lastCycleCompletedAt.ducats = new Date().toISOString();
     broadcast('ducats', getDucatData());
-  });
+  }, () => store.catalog.primes.size === 0);
 }

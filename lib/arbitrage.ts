@@ -20,6 +20,15 @@ async function processSingleSet(
   cache: RequestCache
 ): Promise<void> {
   const setSlug = entry.setItem.slug;
+  if (config.hotRetryIntervalMs > 0) {
+    const prev = store.arbitrage.get(setSlug)?.last_updated;
+    if (prev) {
+      const ageMs = Date.now() - new Date(prev).getTime();
+      if (ageMs > config.hotRetryIntervalMs) {
+        console.log(`[arbitrage] Refreshing stale row ${setSlug} (${Math.round(ageMs / 1000)}s over budget)`);
+      }
+    }
+  }
   const components = entry.components;
   let setPrice: number | null = null;
   let totalPartsCost = 0;
