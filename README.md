@@ -4,24 +4,12 @@
 
 ```bash
 bun install
-bun dev
 ```
 
-Open http://localhost:3000. The first full scrape can take a few
-minutes depending on how much of the market it has to walk (each item
-request is deliberately rate-limited); the UI shows a "first scrape is
-still running" state until then.
-
-## Tuning
-
-Optional - copy `.env.local.example` to `.env.local` to adjust scrape
-interval, rate-limit backoff, the profit/ratio thresholds for each tab,
-and the `PORT` the dashboard listens on (default 3000).
-
-## Type checking
+## Development
 
 ```bash
-bun run typecheck
+bun run dev
 ```
 
 ## Production
@@ -34,4 +22,11 @@ bun start
 * Or to deploy using pm2:
 ```bash
 bun run deploy
+```
+
+## Tuning (optional)
+
+```bash
+cp config.yaml.example config.yaml
+cp .env.local.example .env.local
 ```

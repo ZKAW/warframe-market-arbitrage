@@ -1,0 +1,30 @@
+# Copy to config.yaml and adjust. PORT lives in .env.local.
+
+# Arbitrage: minimum platinum profit to show a set.
+minArbitrageValue: 15
+# Arbitrage: minimum 48h closed-trade volume for a set to show.
+minVolume: 5
+
+# Ducats: minimum ducat-per-platinum ratio to show an item.
+minDucatPerPlatinum: 14
+# Ducats: minimum ducat value to show an item.
+minDucats: 15
+
+# Process-wide cap on simultaneous in-flight warframe.market fetches (burst).
+maxConcurrentRequests: 6
+# Delay after each successful request, seconds (sustained-rate gate).
+requestDelay: 0.75
+# Backoff after a 429, seconds.
+rateLimitDelay: 1.5
+
+# Time between price/volume sweeps, seconds (staleness budget).
+hotRetryInterval: 120
+# Max sets/prime items processed in parallel within one hot sweep.
+hotConcurrency: 4
+
+# Max sets/prime items built in parallel during a cold catalog rebuild.
+catalogConcurrency: 2
+# Time between full catalog rebuilds, seconds (default 6h).
+catalogRefreshSeconds: 21600
+# Cold loop retry interval while no catalog has ever been built, seconds.
+coldRetrySeconds: 30
