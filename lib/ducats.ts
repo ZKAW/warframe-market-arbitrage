@@ -1,7 +1,7 @@
 import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
-import { fetchPriceData, FETCH_FAILED } from './warframeApi';
+import { fetchLowestSell, FETCH_FAILED } from './warframeApi';
 import type { RequestCache } from './scrape';
 import type { DucatEntry } from './types';
 import type { PrimeEntry } from './store';
@@ -30,17 +30,19 @@ async function processSingleItem(
     return;
   }
 
-  const price = await fetchPriceData(slug, cache);
-  if (price === FETCH_FAILED) {
+  const sell = await fetchLowestSell(slug, cache);
+  if (sell === FETCH_FAILED) {
     // Transient (429 past backoff / network). Preserve whatever the
     // previous cycle had; defer to next pass. Treat like a stale-read.
     console.log(`[ducats] Skipping ${slug}: price fetch failed (transient), keeping existing row`);
     return;
   }
-  if (!price || price <= 0) {
+  if (sell === null || !sell.platinum || sell.platinum <= 0) {
     removeDucatRow(slug);
     return;
   }
+  const price = sell.platinum;
+  const quantity = sell.quantity;
 
   const ratio = ducats / price;
 
@@ -53,6 +55,7 @@ async function processSingleItem(
     item: slug,
     ducats,
     platinum_price: price,
+    quantity,
     ducat_per_platinum: Math.round(ratio * 1000) / 1000,
     platinum_per_ducat: Math.round((price / ducats) * 1000) / 1000,
     market_url: `https://warframe.market/items/${slug}`,

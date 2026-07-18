@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parse } from 'yaml';
 
 // All knobs live in config.yaml at the repo root. PORT for the dashboard
 // itself is NOT here - Next.js reads it from the process environment before
@@ -18,12 +20,17 @@ type RawConfig = {
   filters?: NumberMap;
 };
 
-const CONFIG_PATH = new URL('../config.yaml', import.meta.url).pathname;
+
+// Absolute path to config.yaml. Resolved from the process working directory
+// (the repo root under `next start` / pm2) rather than from import.meta.url,
+// which Turbopack rewrites to point at the bundled chunk in .next/server and
+// would make the read silently fall back to defaults in production.
+const CONFIG_PATH = resolve(process.cwd(), 'config.yaml');
 
 function loadRaw(): RawConfig {
   try {
     const text = readFileSync(CONFIG_PATH, 'utf8');
-    return text.trim() ? (Bun.YAML.parse(text) as RawConfig) : {};
+    return text.trim() ? (parse(text) as RawConfig) : {};
   } catch {
     return {};
   }
@@ -102,3 +109,5 @@ export const config = {
   // on an item nobody actually trades.
   minVolume: num(filters.minVolume, 2),
 };
+
+console.log('config', config);

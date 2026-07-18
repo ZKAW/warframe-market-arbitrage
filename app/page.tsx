@@ -142,6 +142,20 @@ const TABS = {
         sortAccessor: (r) => r.set_price,
       },
       {
+        key: 'quantity',
+        label: 'Qty',
+        align: 'right',
+        render: (r) => (r.quantity == null ? '—' : `${r.quantity}`),
+        sortAccessor: (r) => (r.quantity == null ? -1 : r.quantity),
+      },
+      {
+        key: 'avg_price',
+        label: 'Avg price',
+        align: 'right',
+        render: (r) => (r.avg_price == null ? '—' : `${Math.round(r.avg_price)}p`),
+        sortAccessor: (r) => (r.avg_price == null ? -1 : r.avg_price),
+      },
+      {
         key: 'total_part_price',
         label: 'Parts cost',
         align: 'right',
@@ -177,6 +191,7 @@ const TABS = {
           </a>
         ),
       },
+      { key: 'ducat_per_platinum', label: 'Ducat/p', align: 'right' },
       { key: 'ducats', label: 'Ducats', align: 'right' },
       {
         key: 'platinum_price',
@@ -185,7 +200,13 @@ const TABS = {
         render: (r) => `${r.platinum_price}p`,
         sortAccessor: (r) => r.platinum_price,
       },
-      { key: 'ducat_per_platinum', label: 'Ducat/p', align: 'right' },
+      {
+        key: 'quantity',
+        label: 'Qty',
+        align: 'right',
+        render: (r) => `${r.quantity}`,
+        sortAccessor: (r) => r.quantity,
+      },
       { key: 'platinum_per_ducat', label: 'p/Ducat', align: 'right' },
       { key: 'last_updated', label: 'Updated', align: 'right', render: (r) => <RelativeTime iso={r.last_updated} />, sortAccessor: (r) => new Date(r.last_updated).getTime() },
     ],

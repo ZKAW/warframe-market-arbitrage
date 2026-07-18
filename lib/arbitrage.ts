@@ -1,7 +1,7 @@
 import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
-import { fetchPriceData, fetchStatisticsVolume, FETCH_FAILED } from './warframeApi';
+import { fetchLowestSell, fetchPriceData, fetchStatistics, FETCH_FAILED } from './warframeApi';
 import type { RequestCache } from './scrape';
 import type { ArbitrageEntry } from './types';
 import type { SetEntry } from './store';
@@ -30,6 +30,7 @@ async function processSingleSet(
   const setSlug = entry.setItem.slug;
   const components = entry.components;
   let setPrice: number | FetchFailed | null = null;
+  let setQuantity: number | null = null;
   let totalPartsCost = 0;
   let incomplete = false;
   // True only on a real "this part has no sell orders / was delisted" null
@@ -41,8 +42,16 @@ async function processSingleSet(
 
   for (const { slug, quantity = 1 } of components) {
     if (slug === setSlug) {
-      setPrice = await fetchPriceData(slug, cache);
-      if (setPrice === FETCH_FAILED) transientFailure = true;
+      const setSell = await fetchLowestSell(slug, cache);
+      if (setSell === FETCH_FAILED) {
+        setPrice = FETCH_FAILED;
+        transientFailure = true;
+      } else if (setSell === null) {
+        setPrice = null;
+      } else {
+        setPrice = setSell.platinum;
+        setQuantity = setSell.quantity;
+      }
     } else {
       const price = await fetchPriceData(slug, cache);
       if (price === FETCH_FAILED) {
@@ -81,7 +90,9 @@ async function processSingleSet(
   // 48h closed-trade volume gates illiquid sets whose "profit" is really a
   // stale ask nobody buys. A null lookup (v1 down/429) is treated as "unknown,
   // don't filter" so a flaky statistics call can't wipe a known-good row.
-  const volume = await fetchStatisticsVolume(setSlug, cache);
+  const stats = await fetchStatistics(setSlug, cache);
+  const volume = stats?.volume ?? null;
+  const avgPrice = stats?.avg_price ?? null;
   if (volume !== null && volume < config.minVolume) {
     if (store.arbitrage.delete(setSlug)) {
       console.log(
@@ -91,13 +102,14 @@ async function processSingleSet(
     }
     return;
   }
-
   store.arbitrage.set(setSlug, {
     set: setSlug,
     arbitrage_value: arbitrageValue,
     set_price: setPrice,
+    quantity: setQuantity,
     total_part_price: totalPartsCost,
     volume,
+    avg_price: avgPrice,
     market_url: `https://warframe.market/items/${setSlug}`,
     last_updated: new Date().toISOString(),
     tags: entry.setItem.tags ?? [],

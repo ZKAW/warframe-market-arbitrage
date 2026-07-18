@@ -6,12 +6,20 @@ import type { WarframeItem, ItemDetails, OrderEntry } from './types';
 
 interface StatisticsClosedWindow {
   volume: number;
+  avg_price?: number;
   [key: string]: unknown;
 }
 
 interface StatisticsPayload {
   statistics_closed?: { '48hours'?: StatisticsClosedWindow[] };
   [key: string]: unknown;
+}
+
+export interface StatisticsSummary {
+  volume: number;
+  // Volume-weighted average price across the 48h closed-trade windows.
+  // Null when the statistics call failed or returned no closed trades.
+  avg_price: number | null;
 }
 
 interface ItemListPayload {
@@ -63,15 +71,16 @@ export async function fetchAllItems(): Promise<WarframeItem[] | null> {
   return json?.data ?? null;
 }
 
-// 48h closed-trade volume for a set slug, from the v1 statistics endpoint.
-// Returns null on a missing/failed lookup so the caller can keep the row and
-// let minVolume reject it (rather than dropping it as if unprofitable).
-// A transient 429/network failure maps to null too - safe: the caller's
-// "null means don't filter" rule preserves the row until the next cycle.
-export async function fetchStatisticsVolume(
+// 48h closed-trade volume + volume-weighted average price for a set slug, from
+// the v1 statistics endpoint. Returns null on a missing/failed lookup so the
+// caller can keep the row and let minVolume reject it (rather than dropping it
+// as if unprofitable). A transient 429/network failure maps to null too -
+// safe: the caller's "null means don't filter" rule preserves the row until
+// the next cycle.
+export async function fetchStatistics(
   itemSlug: string,
   cache?: RequestCache
-): Promise<number | null> {
+): Promise<StatisticsSummary | null> {
   const json = await cachedJson<StatisticsResponse>(
     `${config.v1ApiBase}/items/${itemSlug}/statistics`,
     cache
@@ -79,13 +88,31 @@ export async function fetchStatisticsVolume(
   if (json === FETCH_FAILED) return null;
   const hours = json?.payload?.statistics_closed?.['48hours'] ?? [];
   if (hours.length === 0) return null;
-  return hours.reduce((sum, h) => sum + h.volume, 0);
+  let volume = 0;
+  let weighted = 0;
+  for (const h of hours) {
+    volume += h.volume;
+    if (typeof h.avg_price === 'number') weighted += h.avg_price * h.volume;
+  }
+  const avg_price = weighted > 0 ? weighted / volume : null;
+  return { volume, avg_price };
 }
 
-export async function fetchPriceData(
+export interface LowestSell {
+  platinum: number;
+  // Copies offered in the cheapest in-game sell order. From the same
+  // /v2/orders/item payload as the price.
+  quantity: number;
+}
+
+// Picks the cheapest visible in-game sell order for a slug. Returns null
+// when no qualifying order exists (delisted / no live sellers), or
+// FETCH_FAILED when every retry attempt blew past the backoff cap - the
+// latter is a transient signal callers preserve-existing-row on.
+export async function fetchLowestSell(
   itemSlug: string,
   cache?: RequestCache
-): Promise<number | FetchFailed | null> {
+): Promise<LowestSell | FetchFailed | null> {
   const json = await cachedJson<OrdersPayload>(
     `${config.apiBase}/orders/item/${itemSlug}`,
     cache
@@ -93,13 +120,24 @@ export async function fetchPriceData(
   if (json === FETCH_FAILED) return FETCH_FAILED;
   const orders: OrderEntry[] = json?.data ?? [];
 
-  const validPrices = orders
-    .filter(
-      (o) => o?.type === 'sell' && o?.visible === true && o?.user?.status === 'ingame'
-    )
-    .map((o) => o.platinum);
+  let best: OrderEntry | null = null;
+  for (const o of orders) {
+    if (o?.type !== 'sell' || o?.visible !== true || o?.user?.status !== 'ingame') continue;
+    if (best === null || o.platinum < best.platinum) best = o;
+  }
+  return best === null
+    ? null
+    : { platinum: best.platinum, quantity: best.quantity };
+}
 
-  return validPrices.length ? Math.min(...validPrices) : null;
+export async function fetchPriceData(
+  itemSlug: string,
+  cache?: RequestCache
+): Promise<number | FetchFailed | null> {
+  const best = await fetchLowestSell(itemSlug, cache);
+  if (best === FETCH_FAILED) return FETCH_FAILED;
+  if (best === null) return null;
+  return best.platinum;
 }
 
 export async function getItemDetails(
