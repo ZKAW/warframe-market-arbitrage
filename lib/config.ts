@@ -98,8 +98,8 @@ export const config = {
   // seconds instead of sitting idle for hours showing nothing.
   coldRetryMs: num(catalog.coldRetrySeconds, 30) * 1000,
 
-  minArbitrageValue: num(filters.minArbitrageValue, 15),
-  minDucatPerPlatinum: num(filters.minDucatPerPlatinum, 20),
+  minArbitrageValue: num(filters.minArbitrageValue, 14),
+  minDucatPerPlatinum: num(filters.minDucatPerPlatinum, 14),
   minDucats: num(filters.minDucats, 15),
 
   // Arbitrage: minimum 48h closed-trade volume for a set to clear the bar.

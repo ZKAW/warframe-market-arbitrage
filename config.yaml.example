@@ -2,11 +2,11 @@
 
 filters:
   # Arbitrage: minimum platinum profit to show a set.
-  minArbitrageValue: 15
+  minArbitrageValue: 14
   # Arbitrage: minimum 48h closed-trade volume for a set to show.
   minVolume: 2
   # Ducats: minimum ducat-per-platinum ratio to show an item.
-  minDucatPerPlatinum: 20
+  minDucatPerPlatinum: 14
   # Ducats: minimum ducat value to show an item.
   minDucats: 15
 
