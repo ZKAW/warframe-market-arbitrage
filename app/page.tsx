@@ -189,13 +189,6 @@ const TABS = {
         sortAccessor: (r) => r.set_price,
       },
       {
-        key: 'quantity',
-        label: 'Qty',
-        align: 'right',
-        render: (r) => (r.quantity == null ? '—' : `${r.quantity}`),
-        sortAccessor: (r) => (r.quantity == null ? -1 : r.quantity),
-      },
-      {
         key: 'avg_price',
         label: 'Avg price',
         align: 'right',
@@ -208,6 +201,13 @@ const TABS = {
         align: 'right',
         render: (r) => `${r.total_part_price}p`,
         sortAccessor: (r) => r.total_part_price,
+      },
+      {
+        key: 'quantity',
+        label: 'Qty',
+        align: 'right',
+        render: (r) => (r.quantity == null ? '—' : `${r.quantity}`),
+        sortAccessor: (r) => (r.quantity == null ? -1 : r.quantity),
       },
       {
         key: 'volume',

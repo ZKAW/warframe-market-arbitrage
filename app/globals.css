@@ -30,7 +30,11 @@ body {
 }
 
 main {
-  max-width: 960px;
+  /* Wide enough to fit the arbitrage table's 8 columns on one line in the
+     common case without forcing nowrap-driven overflow. This number isn't
+     load-bearing for correctness anymore (see the wrap rules below) - it's
+     just chosen to make wrapping rare rather than the norm. */
+  max-width: 1200px;
   margin: 0 auto;
   min-height: 100dvh;
   padding:
@@ -185,21 +189,24 @@ table a:focus-visible {
 .table-wrap {
   border: 1px solid var(--border);
   border-radius: 6px;
-  /* Horizontal clipping keeps the rounded corners on the table itself;
-     vertical overflow stays visible so the Min. profit tooltip (and any
-     other absolutely-positioned popover) isn't cut off when it appears
-     near the top of the wrap. */
+  /* Kept as a defensive backstop, not the mechanism that prevents
+     clipping anymore - the wrap rules below (nowrap only on short
+     numeric cells, overflow-wrap: anywhere on the one variable-length
+     column) are what actually guarantee the table never needs to exceed
+     this box's width. Vertical overflow stays visible so the Min. profit
+     tooltip isn't cut off near the top of the wrap. */
   overflow-x: hidden;
   overflow-y: visible;
 }
 
-/* Desktop-first: table visible, card list hidden. The mobile media query
-   below swaps the two so wide rows never force horizontal scroll on phones. */
+/* Desktop-first: table visible, card list hidden. The responsive media
+   query below swaps the two on narrower viewports; the card list shows
+   and independently sorts every field with no overflow risk at all. */
 .data-table {
   display: table;
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: 0.85rem;
 }
 
 .card-list {
@@ -340,10 +347,16 @@ thead th {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 0.7rem 0.9rem;
+  padding: 0.65rem 0.75rem;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  white-space: nowrap;
+  /* No forced nowrap here on purpose: a header label ("Min. profit" plus
+     its info icon and sort icon) that doesn't fit its column's available
+     width should wrap to a second line, not bleed past the column edge or
+     get silently clipped by .table-wrap's overflow-x: hidden. This is
+     what actually fixes the "Updated" column getting clipped - forcing
+     single-line headers/cells is what pushed the table wider than its
+     container in the first place. */
 }
 
 thead th.sortable {
@@ -373,6 +386,8 @@ thead th.sortable[data-sort='desc'] {
 thead th .th-label {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.15rem;
   gap: 0.35rem;
 }
 
@@ -427,9 +442,12 @@ thead th.sortable[data-sort='desc'] .sort-icon {
 }
 
 tbody td {
-  padding: 0.7rem 0.9rem;
+  padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border);
-  white-space: nowrap;
+  /* No blanket nowrap: only .num cells (below) force a single line, since
+     those values are always short by construction ("95p", "2 min ago").
+     The Set/Item column is the one cell whose content length isn't
+     bounded by our own formatting, so it's left free to wrap. */
 }
 
 tbody tr:last-child td {
@@ -440,10 +458,38 @@ tbody tr:hover {
   background: var(--surface);
 }
 
+/* The one variable-length column (Set / Item). overflow-wrap: anywhere
+   means even a long unbroken slug like "silva_and_aegis_prime_set" (no
+   spaces, and browsers don't treat underscores as break points) can still
+   break instead of forcing the whole table wider than .table-wrap. */
+tbody td:not(.num) {
+  overflow-wrap: anywhere;
+}
+
 .num {
   text-align: right;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Two-line numeric cell: a primary value with a smaller, muted subordinate
+   value beneath it (e.g. Set price with the sell order's copies-available
+   count). Used only where the second value is a footnote to the first,
+   not for anything that needs its own independent sort - Avg price and
+   Vol (48h) each stay as their own full column precisely so they remain
+   independently sortable. */
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.3;
+}
+
+.cell-sub {
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 table a {
@@ -567,7 +613,13 @@ table a:hover {
   border-color: var(--danger);
 }
 
-@media (max-width: 640px) {
+/* Table/card breakpoint. Set with a buffer above main's own max-width
+   (1200px + ~50px horizontal padding + a little slack for scrollbars) so
+   there's no dead zone where the table renders without actually having
+   its full 1200px available. Below this, the card list takes over -
+   every field is still shown and independently sortable via card-sort
+   buttons, just stacked instead of columned. */
+@media (max-width: 1260px) {
   main {
     padding-top: calc(1.25rem + var(--safe-top));
     padding-bottom: calc(2.5rem + var(--safe-bottom));
