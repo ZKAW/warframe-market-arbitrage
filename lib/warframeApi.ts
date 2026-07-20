@@ -140,29 +140,42 @@ export async function fetchPriceData(
   return best.platinum;
 }
 
+// Per-{slug} item details (ducats, quantityInSet, setParts fallback for
+// resolveComponent). Returns FETCH_FAILED - not null - on a transient
+// failure (429 past backoff / network blip) so callers in catalog.ts can
+// distinguish "couldn't check this cycle" from "this item is genuinely
+// gone". Collapsing the two used to feed straight into loadCatalog's
+// prune pass and could wipe a perfectly good, currently-live deal off the
+// board over nothing more than a rate limit.
 export async function getItemDetails(
   itemSlug: string,
   cache?: RequestCache
-): Promise<ItemDetails | null> {
+): Promise<ItemDetails | FetchFailed | null> {
   const json = await cachedJson<ItemDetailsPayload>(
     `${config.apiBase}/item/${itemSlug}`,
     cache
   );
-  if (json === FETCH_FAILED) return null;
+  if (json === FETCH_FAILED) return FETCH_FAILED;
   return json?.data ?? null;
 }
 
 // Per-/items/{slug} payload (plural "items"): the set manifest carrying
 // setParts. arbitrage hit this directly; centralizing it lets the cache
 // dedupe any other lookup against the same URL within a cycle.
+//
+// Returns FETCH_FAILED - not null - on a transient failure, for the same
+// reason as getItemDetails above: catalog.ts needs to tell "couldn't
+// check the manifest this cycle" apart from "this set no longer has one",
+// since only the latter should cause the set (and any live deal row for
+// it) to be dropped.
 export async function fetchSetManifest(
   setSlug: string,
   cache?: RequestCache
-): Promise<{ setParts?: string[] } | null> {
+): Promise<{ setParts?: string[] } | FetchFailed | null> {
   const json = await cachedJson<SetManifestPayload>(
     `${config.apiBase}/items/${setSlug}`,
     cache
   );
-  if (json === FETCH_FAILED) return null;
+  if (json === FETCH_FAILED) return FETCH_FAILED;
   return json?.data ?? null;
 }

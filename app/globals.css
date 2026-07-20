@@ -110,6 +110,9 @@ main {
   .sort-icon {
     transition: none;
   }
+  .tooltip-bubble {
+    transition: none;
+  }
 }
 
 .tabs {
@@ -182,7 +185,12 @@ table a:focus-visible {
 .table-wrap {
   border: 1px solid var(--border);
   border-radius: 6px;
-  overflow: hidden;
+  /* Horizontal clipping keeps the rounded corners on the table itself;
+     vertical overflow stays visible so the Min. profit tooltip (and any
+     other absolutely-positioned popover) isn't cut off when it appears
+     near the top of the wrap. */
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 /* Desktop-first: table visible, card list hidden. The mobile media query
@@ -205,6 +213,8 @@ table a:focus-visible {
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
 }
 
 .tag-filter-label {
@@ -312,6 +322,15 @@ table a:focus-visible {
   background: var(--surface);
 }
 
+/* Only the very first child of table-wrap needs top rounding - when the
+   tag filter is present it sits above the toolbar and owns the corners
+   instead (the rule above), but this keeps the toolbar itself correct on
+   tabs without tag filtering (ducats). */
+.table-wrap > .table-toolbar:first-child {
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+}
+
 
 
 thead th {
@@ -359,6 +378,18 @@ thead th .th-label {
 
 thead th.num .th-label {
   justify-content: flex-end;
+}
+
+.th-info {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: help;
+  transition: color 150ms ease-out;
+}
+
+.th-info:hover {
+  color: var(--text);
 }
 
 .sort-icon {
@@ -439,6 +470,87 @@ table a:hover {
   outline: 2px solid var(--accent-warm);
   outline-offset: 2px;
   border-radius: 2px;
+}
+
+/* --- Min. profit tiers (arbitrage) ---
+   green: real (avg-price) profit floor matches or beats headline Profit.
+   orange: still profitable at avg price, just less than Profit implies.
+   red: avg-price profit is negative - the listing is likely a mispriced
+   outlier, flagged with a dotted underline + hover tooltip via Tooltip. */
+.min-profit {
+  font-variant-numeric: tabular-nums;
+}
+
+.min-profit-green {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.min-profit-orange {
+  color: var(--accent-warm);
+  font-weight: 600;
+}
+
+.min-profit-red {
+  color: var(--danger);
+  font-weight: 600;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+/* Custom hover/focus tooltip (Tooltip component). Anchors above and to the
+   left of its trigger so it reads naturally in a right-aligned numeric
+   column without spilling off the table edge. */
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tooltip-bubble {
+  position: absolute;
+  bottom: calc(100% + 7px);
+  right: 0;
+  width: max-content;
+  max-width: 220px;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: #1a2130;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  line-height: 1.4;
+  white-space: normal;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(3px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+  z-index: 30;
+}
+
+.tooltip-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 10px;
+  border: 5px solid transparent;
+  border-top-color: #1a2130;
+}
+
+.tooltip-wrap:hover .tooltip-bubble,
+.tooltip-wrap:focus-visible .tooltip-bubble,
+.tooltip-wrap:focus .tooltip-bubble {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .empty-state {

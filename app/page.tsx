@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import DataTable, { type Column, type SortDirection } from './components/DataTable';
 import Button from './components/Button';
+import Tooltip from './components/Tooltip';
 import type { ArbitrageEntry, DucatEntry } from '../lib/types';
 
 
@@ -113,6 +114,31 @@ function HeaderUpdatedTime({
   );
 }
 
+// "Min. profit" = 48h volume-weighted average sale price minus parts cost.
+// `arbitrage_value` (Profit) uses the single cheapest live sell order for
+// the set, which is sometimes a misplaced/outlier listing far under what
+// the set actually trades for. avg_price is a much better estimate of what
+// a buyer would really pay, so avg_price - parts cost is a floor on the
+// profit a flip could realistically clear.
+function computeMinProfit(r: ArbitrageEntry): number | null {
+  if (r.avg_price == null) return null;
+  return r.avg_price - r.total_part_price;
+}
+
+type ProfitTier = 'red' | 'orange' | 'green';
+
+// red: the real (average-price) profit is negative - the listed set price
+//   is likely a fluke; flipping at real market rates would lose money.
+// green: the real profit floor matches or beats the headline Profit - a
+//   trustworthy, possibly even better, opportunity.
+// orange: real profit is positive but below the headline number - still
+//   profitable, just not as good as Profit alone suggests.
+function minProfitTier(minProfit: number, profit: number): ProfitTier {
+  if (minProfit < 0) return 'red';
+  if (minProfit >= profit) return 'green';
+  return 'orange';
+}
+
 const TABS = {
   arbitrage: {
     label: 'Arbitrage',
@@ -133,6 +159,27 @@ const TABS = {
         align: 'right',
         render: (r) => `+${r.arbitrage_value}p`,
         sortAccessor: (r) => r.arbitrage_value,
+      },
+      {
+        key: 'min_profit',
+        label: 'Min. profit',
+        align: 'right',
+        headerTooltip:
+          'Profit if the set sells at the 48h average price instead of the current listing (avg price − parts cost). A single cheap sell order can make the Profit column look better than it really is.',
+        render: (r) => {
+          const minProfit = computeMinProfit(r);
+          if (minProfit == null) return '—';
+          const tier = minProfitTier(minProfit, r.arbitrage_value);
+          const text = `${minProfit >= 0 ? '+' : ''}${Math.round(minProfit)}p`;
+          const value = <span className={`min-profit min-profit-${tier}`}>{text}</span>;
+          if (tier !== 'red') return value;
+          return (
+            <Tooltip label="Caution: at the real 48h average price this set would sell at a loss. The current listing is probably a mispriced outlier, not a real profit opportunity.">
+              {value}
+            </Tooltip>
+          );
+        },
+        sortAccessor: (r) => computeMinProfit(r) ?? -1_000_000,
       },
       {
         key: 'set_price',

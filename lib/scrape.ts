@@ -45,8 +45,10 @@ function pickDueSlug(
 // Time until the soonest slug crosses the staleness budget. Only called
 // when pickDueSlug found nothing due now - so every catalog slug is
 // fresh-within-budget. Returns the budget as a safe floor if the catalog
-// is empty (the caller already gated on builtAt, but a defensive bound
-// beats a forever-sleep on a transient empty window).
+// is empty (e.g. seconds after a cold start, before the first set/prime
+// has resolved) - a defensive bound beats a forever-sleep on a transient
+// empty window; the outer loop caps this at coldRetryMs anyway so an
+// empty catalog is rechecked promptly rather than waited out in full.
 function msUntilNextDue(pipeline: 'arbitrage' | 'ducats'): number {
   if (config.hotRetryIntervalMs <= 0) return 0;
   const { deadlines, inFlight } = store.pipelineState[pipeline];
@@ -114,6 +116,12 @@ export async function mapWithConcurrency<T>(
 // every cycle and got re-evaluated forever; now every slug gets a deadline
 // and respects the budget.
 //
+// Workers have no catalog-build-completion gate (see the loop below) - they
+// sweep store.catalog.sets/primes continuously, including mid-build. That's
+// safe because buildSets/buildPrimes (catalog.ts) only ever publish a slug
+// once it's fully resolved, so anything visible in the live catalog map is
+// always a complete, valid entry - never partial.
+//
 // The process-wide semaphore in httpClient.ts (maxConcurrentRequests) is
 // still the sole rate gate across all three pipelines (catalog + arb +
 // ducats); hotConcurrency here just bounds the per-pipeline worker count.
@@ -133,18 +141,15 @@ function runStaleDrivenLoop(
 
   const worker = async (workerId: number): Promise<void> => {
     while (!token.cancelled) {
-      // Cold-build gate: don't sweep until the first COMPLETED catalog
-      // build has landed. Mid-build streaming otherwise steals the
-      // shared rate-limit budget from the build and produces misleading
-      // partial-catalog sweeps. Steady-state rebuilds keep working
-      // (builtAt is always set past the first build); pruned slugs are
-      // naturally excluded because pickDueSlug only sees live catalog
-      // slugs, and the catalog-rebuild prune pass clears their deadlines.
-      if (store.catalog.builtAt === null) {
-        await sleep(config.coldRetryMs);
-        continue;
-      }
-
+      // No build-completion gate: store.catalog.sets/primes only ever
+      // contain fully-resolved entries, so it's always safe to sweep
+      // whatever's currently there - including mid-build, as entries
+      // stream in one by one. This lets the very first cold start (and
+      // every rebuild after it) surface deals as soon as the first
+      // set/prime resolves instead of sitting idle until the whole
+      // ~240-set catalog finishes. When the catalog is still empty
+      // (e.g. seconds after startup), pickDueSlug just returns null and
+      // we fall through to the sleep-and-recheck branch below.
       const slug = pickDueSlug(name, Date.now());
       if (slug) {
         inFlight.add(slug);
@@ -190,9 +195,9 @@ function runStaleDrivenLoop(
 // Cold loop: rebuilds the static catalog (sets + primes) on its own slow
 // timer, separate from the continuous hot price-refresh engines. Its own
 // RequestCache per build dedupes the one-time manifest/details fetches
-// within that build. The hot engines sleep coldRetryMs while their catalog
-// mapping is empty, so kicking this first in startScrapeLoop doesn't race
-// the catalog against a hot tick.
+// within that build. The hot engines have no build-completion gate (see
+// runStaleDrivenLoop), so kicking this off first here just means the
+// catalog's first streamed entries land as early as possible.
 function runCatalogLoop(): void {
   const token = { cancelled: false };
   store.catalogToken = token;
@@ -239,13 +244,15 @@ export function startScrapeLoop(): void {
 
   runCatalogLoop();
   // Each hot pipeline runs a persistent stale-driven worker pool (see
-  // runStaleDrivenLoop). The builtAt gate inside the workers keeps them
-  // dormant until the first complete catalog build - mid-build streaming
-  // otherwise steals rate-limit budget from the build. After the first
-  // build, workers pull stalest-due slugs continuously and stamp fresh
-  // deadlines, so hotRetryIntervalMs actually drives the queue for every
-  // catalog row including unprofitable ones, instead of being aspirational
-  // documentation over a 240-row sweep wall-clock.
+  // runStaleDrivenLoop). Workers sweep store.catalog.sets/primes
+  // continuously with no gate on catalog-build completion, so the very
+  // first set/prime resolved by the cold catalog build above (still
+  // running in the background) is picked up within seconds rather than
+  // after the whole ~240-set catalog finishes. Workers pull stalest-due
+  // slugs continuously and stamp fresh deadlines, so hotRetryIntervalMs
+  // actually drives the queue for every catalog row including
+  // unprofitable ones, instead of being aspirational documentation over
+  // a 240-row sweep wall-clock.
   runStaleDrivenLoop('arbitrage', processArbitrageSlug, () => {
     store.ready.arbitrage = true;
     store.lastCycleCompletedAt.arbitrage = new Date().toISOString();

@@ -2,6 +2,8 @@ import {
   fetchAllItems,
   fetchSetManifest,
   getItemDetails,
+  FETCH_FAILED,
+  type FetchFailed,
 } from './warframeApi';
 import { store } from './store';
 import { mapWithConcurrency } from './scrape';
@@ -14,11 +16,19 @@ import { config } from './config';
 // /v2/item/{uid} resolves a UID to { slug, quantityInSet }. This is the same
 // getItemSpecs shape that arbitrage.ts used to call per part on every hot
 // cycle; it now runs once per catalog rebuild (cold path) only.
+//
+// Returns FETCH_FAILED (not null) on a transient failure so callers can
+// distinguish "couldn't check right now" from "this part is genuinely
+// gone" - conflating the two used to make a single rate-limit hiccup look
+// identical to a real delisting, which fed straight into loadCatalog's
+// prune pass and could wipe a perfectly good, currently-live deal off the
+// board over nothing more than a 429.
 async function resolveComponent(
   uid: string,
   cache: RequestCache
-): Promise<SetComponent | null> {
+): Promise<SetComponent | FetchFailed | null> {
   const details = await getItemDetails(uid, cache);
+  if (details === FETCH_FAILED) return FETCH_FAILED;
   if (!details) return null;
   return { slug: details.slug, quantity: details.quantityInSet ?? 1 };
 }
@@ -33,25 +43,51 @@ async function buildSets(
   const total = setItems.length;
 
   // Stream each resolved set straight into the live store map so the hot
-  // tick can start sweeping the moment the first set lands, instead of
-  // waiting for the whole ~240-set catalog to build. The hot tick reads
-  // store.catalog.sets.values() and snapshots the keys at tick start, so
-  // concurrent map writes during a build are safe - a set added mid-tick
-  // is just picked up on the next tick. Same rate-limit footprint as
+  // loop can start sweeping the moment the first set lands, instead of
+  // waiting for the whole ~240-set catalog to build. The hot loop (see
+  // runStaleDrivenLoop in scrape.ts) has no build-completion gate and
+  // reads store.catalog.sets directly, so a set added mid-build is picked
+  // up on its very next pass - including during the very first cold
+  // start, not just steady-state rebuilds. Same rate-limit footprint as
   // before (catalogConcurrency workers, requestDelayMs gate);
   // warframe.market 429s are handled by the per-request retry+backoff in
   // httpClient.ts, not by widening the pool.
   await mapWithConcurrency(setItems, config.catalogConcurrency, async (setItem) => {
     const manifest = await fetchSetManifest(setItem.slug, cache);
+
+    if (manifest === FETCH_FAILED) {
+      // Transient (429 past backoff / network blip) - NOT a delisting
+      // signal. Carry over whatever this slug's catalog entry looked
+      // like before this rebuild started (store.catalog.sets still holds
+      // it untouched) so the end-of-build prune pass doesn't treat
+      // "couldn't check this cycle" as "gone" and rip out a currently-
+      // live, perfectly good deal. It gets a fresh shot next rebuild.
+      const prior = store.catalog.sets.get(setItem.slug);
+      if (prior) sets.set(setItem.slug, prior);
+      console.log(
+        `[catalog] Skipping ${setItem.slug}: manifest fetch failed (transient)${
+          prior ? ', keeping existing entry' : ''
+        }`
+      );
+      resolved++;
+      return;
+    }
     if (!manifest) {
+      // Real absence (404 / no manifest) - genuinely gone. Don't carry
+      // over a prior entry; let the prune pass below drop it.
       resolved++;
       return;
     }
 
     const components: SetComponent[] = [];
     let incomplete = false;
+    let transientFailure = false;
     for (const uid of manifest.setParts ?? []) {
       const comp = await resolveComponent(uid, cache);
+      if (comp === FETCH_FAILED) {
+        transientFailure = true;
+        break;
+      }
       // Hard-fail this set on any missing part: a partial parts list would
       // silently undercount total cost and produce false-positive arbitrage.
       if (!comp) {
@@ -60,7 +96,18 @@ async function buildSets(
       }
       components.push(comp);
     }
-    if (!incomplete && components.length > 0) {
+
+    if (transientFailure) {
+      // Same "don't punish a hiccup" reasoning as the manifest fetch
+      // above - preserve the prior entry rather than dropping the set.
+      const prior = store.catalog.sets.get(setItem.slug);
+      if (prior) sets.set(setItem.slug, prior);
+      console.log(
+        `[catalog] Skipping ${setItem.slug}: part fetch failed (transient)${
+          prior ? ', keeping existing entry' : ''
+        }`
+      );
+    } else if (!incomplete && components.length > 0) {
       const entry: SetEntry = { setItem, components };
       sets.set(setItem.slug, entry);
       store.catalog.sets.set(setItem.slug, entry);
@@ -84,12 +131,13 @@ async function buildPrimes(
   const primes = new Map<string, PrimeEntry>();
 
   // Stream each resolved prime into the live store map so the ducats hot
-  // tick can start sweeping the moment the first prime lands, mirroring
-  // buildSets. When the bulk /v2/items payload carries ducats (the common
-  // case) this loop is cheap: zero extra fetches, just a walk over the
-  // item list writing entries. The per-item fallback (only when the bulk
-  // field is absent entirely) stays sequential - shelling out per item is
-  // already the rare path and widening it here would multiply 429 risk.
+  // loop can start sweeping the moment the first prime lands, mirroring
+  // buildSets - including during the very first cold start. When the bulk
+  // /v2/items payload carries ducats (the common case) this loop is
+  // cheap: zero extra fetches, just a walk over the item list writing
+  // entries. The per-item fallback (only when the bulk field is absent
+  // entirely) stays sequential - shelling out per item is already the
+  // rare path and widening it here would multiply 429 risk.
   for (const item of items) {
     if (!item?.slug) continue;
     const isPrimeCandidate = item.ducats || item.tags?.includes('prime');
@@ -101,6 +149,19 @@ async function buildPrimes(
     let ducats = item.ducats ?? null;
     if (ducats === null && !bulkHasDucats) {
       const details = await getItemDetails(item.slug, cache);
+      if (details === FETCH_FAILED) {
+        // Transient - preserve whatever this slug had before rather than
+        // treating a network hiccup as "not a ducat-worthy prime after
+        // all" and letting the prune pass wipe a live deal over it.
+        const prior = store.catalog.primes.get(item.slug);
+        if (prior) primes.set(item.slug, prior);
+        console.log(
+          `[catalog] Skipping ${item.slug}: item details fetch failed (transient)${
+            prior ? ', keeping existing entry' : ''
+          }`
+        );
+        continue;
+      }
       ducats = details?.ducats ?? null;
     }
     if (ducats == null) continue;
@@ -139,6 +200,9 @@ export async function loadCatalog(cache: RequestCache): Promise<void> {
   // didn't reproduce (delisted/renamed) so stale entries can't linger past
   // the rebuild. We streamed sets in during buildSets, so this is the
   // single prune pass that converges the live map onto the new build.
+  // newSets/newPrimes carry over prior entries for slugs that only hit a
+  // transient failure this cycle (see buildSets/buildPrimes above), so
+  // this pass only ever drops genuinely-gone slugs, never a hiccup.
   for (const slug of [...store.catalog.sets.keys()]) {
     if (!newSets.has(slug)) store.catalog.sets.delete(slug);
   }

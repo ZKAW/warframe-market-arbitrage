@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, RotateCcw } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Info, RotateCcw } from 'lucide-react';
 import Button from './Button';
 
 export type SortDirection = 'asc' | 'desc';
@@ -15,6 +15,9 @@ export interface Column<T> {
   align?: 'right';
   render?: (row: T) => ReactNode;
   sortAccessor?: (row: T) => number | string;
+  // Optional explanatory text shown as a title/tooltip beside the header
+  // label. Use for columns whose meaning isn't obvious from the name alone.
+  headerTooltip?: string;
 }
 
 interface DataTableProps<T> {
@@ -222,7 +225,9 @@ export default function DataTable<T extends { set?: string; item?: string; tags?
         onClick={() => handleSort(col.key)}
         onKeyDown={handleKeyDown(col.key)}
       >
-        <span className="card-sort-label">{col.label}</span>
+        <span className="card-sort-label" title={col.headerTooltip}>
+          {col.label}
+        </span>
         {dir === 'asc' ? (
           <ArrowUp {...SORT_ICON_PROPS} />
         ) : dir === 'desc' ? (
@@ -316,6 +321,15 @@ export default function DataTable<T extends { set?: string; item?: string; tags?
                     >
                       <span className="th-label">
                         {col.label}
+                        {col.headerTooltip && (
+                          <span
+                            className="th-info"
+                            title={col.headerTooltip}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Info size={12} strokeWidth={2} aria-hidden="true" />
+                          </span>
+                        )}
                         {dir === 'asc' ? (
                           <ArrowUp {...SORT_ICON_PROPS} />
                         ) : dir === 'desc' ? (
@@ -370,7 +384,7 @@ export default function DataTable<T extends { set?: string; item?: string; tags?
                 <dl className="card-meta">
                   {detailCols.map((col) => (
                     <div className="card-meta-item" key={col.key}>
-                      <dt>{col.label}</dt>
+                      <dt title={col.headerTooltip}>{col.label}</dt>
                       <dd>{renderCell(col, row)}</dd>
                     </div>
                   ))}
