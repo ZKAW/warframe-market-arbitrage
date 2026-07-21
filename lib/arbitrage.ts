@@ -1,9 +1,9 @@
 import { config } from './config';
 import { store } from './store';
 import { broadcast } from './subscriptions';
-import { fetchLowestSell, fetchPriceData, fetchStatistics, FETCH_FAILED } from './warframeApi';
+import { fetchLowestSell, fetchSellOrders, fetchStatistics, FETCH_FAILED, type SellOrder } from './warframeApi';
 import type { RequestCache } from './scrape';
-import type { ArbitrageEntry } from './types';
+import type { ArbitrageEntry, PartFill } from './types';
 import type { SetEntry } from './store';
 import type { FetchFailed } from './httpClient';
 
@@ -13,6 +13,40 @@ import type { FetchFailed } from './httpClient';
 // subscribers with unchanged snapshots.
 function removeArbitrageRow(slug: string): void {
   if (store.arbitrage.delete(slug)) broadcast('arbitrage', getArbitrageData());
+}
+
+interface PartOrderFill {
+  username: string;
+  platinum: number;
+  // Copies bought from this specific order.
+  quantity: number;
+}
+
+// Greedily fills `neededQty` copies of a part from cheapest-first sell
+// orders (fetchSellOrders already returns them sorted ascending by price).
+// A single seller's stock (order.quantity) can be less than what the set
+// needs of that part, so buying `neededQty` copies can mean paying several
+// sellers' prices, not the cheapest order's price repeated `neededQty`
+// times over - that was the previous (optimistic, and often wrong)
+// assumption. fullySupplied is false if every visible order combined still
+// can't cover neededQty; the caller treats that the same as "no price
+// available" rather than reporting a total it knows undercounts reality.
+function consumePartOrders(
+  orders: SellOrder[],
+  neededQty: number
+): { totalCost: number; fills: PartOrderFill[]; fullySupplied: boolean } {
+  let remaining = neededQty;
+  let totalCost = 0;
+  const fills: PartOrderFill[] = [];
+  for (const order of orders) {
+    if (remaining <= 0) break;
+    if (order.quantity <= 0) continue;
+    const take = Math.min(remaining, order.quantity);
+    totalCost += order.platinum * take;
+    fills.push({ username: order.username, platinum: order.platinum, quantity: take });
+    remaining -= take;
+  }
+  return { totalCost, fills, fullySupplied: remaining <= 0 };
 }
 
 // Fetch + evaluate ONE set. Called by the persistent-stale-driven worker
@@ -39,6 +73,10 @@ async function processSingleSet(
   // removal signal: keep the existing row untouched, skip this cycle's
   // update, and let the next pass try again with fresh rate budget.
   let transientFailure = false;
+  // Order-by-order record of who each part's required quantity was bought
+  // from, for the Parts cost hover tooltip. A part shows up more than once
+  // here when one seller's stock wasn't enough to cover it alone.
+  const partBreakdown: PartFill[] = [];
 
   for (const { slug, quantity = 1 } of components) {
     if (slug === setSlug) {
@@ -53,16 +91,27 @@ async function processSingleSet(
         setQuantity = setSell.quantity;
       }
     } else {
-      const price = await fetchPriceData(slug, cache);
-      if (price === FETCH_FAILED) {
+      const orders = await fetchSellOrders(slug, cache);
+      if (orders === FETCH_FAILED) {
         transientFailure = true;
         break;
       }
-      if (price == null) {
+      if (!orders) {
         incomplete = true;
         break;
       }
-      totalPartsCost += price * quantity;
+      const cost = consumePartOrders(orders, quantity);
+      if (!cost.fullySupplied) {
+        // Every visible seller combined still can't cover what the set
+        // needs of this part - treat like "no price available" rather
+        // than reporting a cost we know undercounts reality.
+        incomplete = true;
+        break;
+      }
+      totalPartsCost += cost.totalCost;
+      for (const fill of cost.fills) {
+        partBreakdown.push({ slug, ...fill });
+      }
     }
   }
 
@@ -108,6 +157,7 @@ async function processSingleSet(
     set_price: setPrice,
     quantity: setQuantity,
     total_part_price: totalPartsCost,
+    part_breakdown: partBreakdown,
     volume,
     avg_price: avgPrice,
     market_url: `https://warframe.market/items/${setSlug}`,

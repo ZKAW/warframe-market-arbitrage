@@ -1,5 +1,19 @@
 // Shared data shapes used across lib/ and the API routes/UI that consume them.
 
+export interface PartFill {
+  // Slug of the set component this fill was drawn from (e.g. a blueprint
+  // or barrel needed by the set). One part can appear more than once here
+  // when the set needs more copies of it than a single seller had in
+  // stock - see consumePartOrders in lib/arbitrage.ts.
+  slug: string;
+  username: string;
+  platinum: number;
+  // Copies bought from this specific order to help satisfy the part's
+  // required quantity. Sums to the component's `quantity` across all
+  // fills sharing the same slug.
+  quantity: number;
+}
+
 export interface ArbitrageEntry {
   set: string;
   arbitrage_value: number;
@@ -14,6 +28,12 @@ export interface ArbitrageEntry {
   // the v1 statistics endpoint; null when the call failed or returned no
   // windows with an avg_price.
   avg_price: number | null;
+  // Order-by-order breakdown of how total_part_price was assembled: which
+  // seller(s) and at what price each part's required quantity was drawn
+  // from. A part needing more copies than one seller had in stock shows up
+  // as multiple entries sharing the same slug. Powers the Parts cost hover
+  // tooltip in the UI.
+  part_breakdown: PartFill[];
   market_url: string;
   last_updated: string;
   tags: string[];
@@ -56,6 +76,10 @@ export interface OrderEntry {
   visible: boolean;
   platinum: number;
   quantity: number;
-  user?: { status?: string };
+  // Both field spellings show up in the wild depending on API version;
+  // fetchSellOrders (warframeApi.ts) checks both when labelling a fill for
+  // the Parts cost tooltip, falling back to a placeholder if neither is
+  // present rather than breaking the tooltip.
+  user?: { status?: string; ingameName?: string; ingame_name?: string };
   [key: string]: unknown;
 }

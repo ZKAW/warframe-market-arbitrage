@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import DataTable, { type Column, type SortDirection } from './components/DataTable';
 import Button from './components/Button';
 import Tooltip from './components/Tooltip';
-import type { ArbitrageEntry, DucatEntry } from '../lib/types';
+import type { ArbitrageEntry, DucatEntry, PartFill } from '../lib/types';
 
 
 type Status = 'loading' | 'ok' | 'error';
@@ -139,6 +139,21 @@ function minProfitTier(minProfit: number, profit: number): ProfitTier {
   return 'orange';
 }
 
+// Groups a Parts cost breakdown by part slug, preserving first-seen order,
+// so the hover tooltip can show "part slug -> seller @ price" grouped under
+// each part's own heading instead of one flat list. A part appears with
+// more than one fill when a single seller's stock wasn't enough to cover
+// the set's required quantity of it (see consumePartOrders, lib/arbitrage.ts).
+function groupPartFills(breakdown: PartFill[]): Map<string, PartFill[]> {
+  const bySlug = new Map<string, PartFill[]>();
+  for (const fill of breakdown) {
+    const list = bySlug.get(fill.slug);
+    if (list) list.push(fill);
+    else bySlug.set(fill.slug, [fill]);
+  }
+  return bySlug;
+}
+
 const TABS = {
   arbitrage: {
     label: 'Arbitrage',
@@ -199,7 +214,34 @@ const TABS = {
         key: 'total_part_price',
         label: 'Parts cost',
         align: 'right',
-        render: (r) => `${r.total_part_price}p`,
+        headerTooltip:
+          "Cost to buy every part the set needs. A seller may only have one copy in stock, so buying more than one of a part can draw from several sell orders at different prices - hover the value for exactly who and at what price each part came from.",
+        render: (r) => {
+          const text = `${r.total_part_price}p`;
+          if (!r.part_breakdown || r.part_breakdown.length === 0) return text;
+          const bySlug = groupPartFills(r.part_breakdown);
+          return (
+            <Tooltip
+              className="tooltip-bubble-wide"
+              label={
+                <div className="parts-tooltip">
+                  {[...bySlug.entries()].map(([slug, fills]) => (
+                    <div className="parts-tooltip-part" key={slug}>
+                      <div className="parts-tooltip-slug">{slug}</div>
+                      {fills.map((f, i) => (
+                        <div className="parts-tooltip-fill" key={i}>
+                          {f.username} · {f.platinum}p{f.quantity > 1 ? ` ×${f.quantity}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              }
+            >
+              <span className="parts-cost-value">{text}</span>
+            </Tooltip>
+          );
+        },
         sortAccessor: (r) => r.total_part_price,
       },
       {

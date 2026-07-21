@@ -115,7 +115,7 @@ main {
     transition: none;
   }
   .tooltip-bubble {
-    transition: none;
+    animation: none;
   }
 }
 
@@ -190,13 +190,18 @@ table a:focus-visible {
   border: 1px solid var(--border);
   border-radius: 6px;
   /* Kept as a defensive backstop, not the mechanism that prevents
-     clipping anymore - the wrap rules below (nowrap only on short
-     numeric cells, overflow-wrap: anywhere on the one variable-length
-     column) are what actually guarantee the table never needs to exceed
-     this box's width. Vertical overflow stays visible so the Min. profit
-     tooltip isn't cut off near the top of the wrap. */
+     clipping - the wrap rules below (nowrap only on short numeric cells,
+     overflow-wrap: anywhere on the one variable-length column) are what
+     actually guarantee the table never needs to exceed this box's width.
+     Deliberately NOT paired with `overflow-y: visible` anymore: per the
+     CSS overflow spec, when one axis is non-visible the browser forces
+     the other axis's *computed* value from visible to auto - and auto
+     still clips. That pairing was silently clipping the Min. profit
+     tooltip for any row near the top of the table. The tooltip is now
+     portaled to document.body and positioned with getBoundingClientRect
+     (see Tooltip.tsx), so it never depends on this box's overflow at
+     all. */
   overflow-x: hidden;
-  overflow-y: visible;
 }
 
 /* Desktop-first: table visible, card list hidden. The responsive media
@@ -545,19 +550,24 @@ table a:hover {
   cursor: help;
 }
 
-/* Custom hover/focus tooltip (Tooltip component). Anchors above and to the
-   left of its trigger so it reads naturally in a right-aligned numeric
-   column without spilling off the table edge. */
+/* Custom hover/focus tooltip (Tooltip component). The trigger itself just
+   needs to be an inline flex anchor for its children - all positioning for
+   the bubble now happens in JS via getBoundingClientRect, since the bubble
+   is portaled to document.body rather than living inside .table-wrap (see
+   Tooltip.tsx for why: .table-wrap's overflow-x: hidden was forcing
+   overflow-y to compute as auto instead of visible, which clipped the
+   bubble for any row near the top of the table). */
 .tooltip-wrap {
-  position: relative;
   display: inline-flex;
   align-items: center;
 }
 
+/* Positioned via inline styles set at open time (top/bottom/right, in
+   Tooltip.tsx) since the bubble is portaled to document.body and anchored
+   with `position: fixed` against the trigger's live bounding rect. Only
+   the static visual rules live here. */
 .tooltip-bubble {
-  position: absolute;
-  bottom: calc(100% + 7px);
-  right: 0;
+  position: fixed;
   width: max-content;
   max-width: 220px;
   padding: 0.5rem 0.65rem;
@@ -573,30 +583,41 @@ table a:hover {
   line-height: 1.4;
   white-space: normal;
   text-align: left;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(3px);
-  transition: opacity 120ms ease-out, transform 120ms ease-out;
   pointer-events: none;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
-  z-index: 30;
+  z-index: 1000;
+  animation: tooltip-fade-in 120ms ease-out;
+}
+
+@keyframes tooltip-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .tooltip-bubble::after {
   content: '';
   position: absolute;
-  top: 100%;
   right: 10px;
   border: 5px solid transparent;
+}
+
+/* Bubble rendered above the trigger (default: enough room above it) -
+   arrow points down, sitting on the bubble's bottom edge. */
+.tooltip-bubble-above::after {
+  top: 100%;
   border-top-color: #1a2130;
 }
 
-.tooltip-wrap:hover .tooltip-bubble,
-.tooltip-wrap:focus-visible .tooltip-bubble,
-.tooltip-wrap:focus .tooltip-bubble {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
+/* Bubble rendered below the trigger (not enough room above - e.g. rows
+   near the top of the table) - arrow points up, sitting on the bubble's
+   top edge. */
+.tooltip-bubble-below::after {
+  bottom: 100%;
+  border-bottom-color: #1a2130;
 }
 
 .empty-state {

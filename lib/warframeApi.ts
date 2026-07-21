@@ -105,6 +105,47 @@ export interface LowestSell {
   quantity: number;
 }
 
+// One live, in-game sell order for a slug, as consumed by the greedy
+// quantity fill in lib/arbitrage.ts (consumePartOrders) and reported back
+// in the Parts cost tooltip.
+export interface SellOrder {
+  username: string;
+  platinum: number;
+  quantity: number;
+}
+
+function toSellOrder(o: OrderEntry): SellOrder {
+  return {
+    // The API has used both spellings across versions; fall back to a
+    // placeholder rather than let a missing field break the tooltip.
+    username: o.user?.ingameName ?? o.user?.ingame_name ?? 'Unknown seller',
+    platinum: o.platinum,
+    quantity: o.quantity,
+  };
+}
+
+// Every currently-live, in-game sell order for a slug, cheapest first (or
+// null if there are none). A single seller's `quantity` in stock can be
+// less than what a set needs of that part, so callers that need N copies
+// should walk this list order-by-order (see consumePartOrders in
+// arbitrage.ts) instead of assuming the cheapest order alone can supply N.
+export async function fetchSellOrders(
+  itemSlug: string,
+  cache?: RequestCache
+): Promise<SellOrder[] | FetchFailed | null> {
+  const json = await cachedJson<OrdersPayload>(
+    `${config.apiBase}/orders/item/${itemSlug}`,
+    cache
+  );
+  if (json === FETCH_FAILED) return FETCH_FAILED;
+  const orders: OrderEntry[] = json?.data ?? [];
+  const sell = orders
+    .filter((o) => o?.type === 'sell' && o?.visible === true && o?.user?.status === 'ingame')
+    .map(toSellOrder)
+    .sort((a, b) => a.platinum - b.platinum);
+  return sell.length > 0 ? sell : null;
+}
+
 // Picks the cheapest visible in-game sell order for a slug. Returns null
 // when no qualifying order exists (delisted / no live sellers), or
 // FETCH_FAILED when every retry attempt blew past the backoff cap - the
@@ -113,21 +154,11 @@ export async function fetchLowestSell(
   itemSlug: string,
   cache?: RequestCache
 ): Promise<LowestSell | FetchFailed | null> {
-  const json = await cachedJson<OrdersPayload>(
-    `${config.apiBase}/orders/item/${itemSlug}`,
-    cache
-  );
-  if (json === FETCH_FAILED) return FETCH_FAILED;
-  const orders: OrderEntry[] = json?.data ?? [];
-
-  let best: OrderEntry | null = null;
-  for (const o of orders) {
-    if (o?.type !== 'sell' || o?.visible !== true || o?.user?.status !== 'ingame') continue;
-    if (best === null || o.platinum < best.platinum) best = o;
-  }
-  return best === null
-    ? null
-    : { platinum: best.platinum, quantity: best.quantity };
+  const orders = await fetchSellOrders(itemSlug, cache);
+  if (orders === FETCH_FAILED) return FETCH_FAILED;
+  if (!orders) return null;
+  const best = orders[0];
+  return { platinum: best.platinum, quantity: best.quantity };
 }
 
 export async function fetchPriceData(
