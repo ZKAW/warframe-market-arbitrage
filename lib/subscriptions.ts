@@ -14,7 +14,7 @@
 // different sets and never crossing. The global survives across module
 // re-evaluations, so every instance shares one subscriber pool.
 
-export type StreamEvent = 'snapshot' | 'arbitrage' | 'ducats';
+export type StreamEvent = 'snapshot' | 'arbitrage' | 'ducats' | 'refresh';
 export type Dispatcher = (event: StreamEvent, payload: unknown) => void;
 
 type GlobalWithSubs = typeof globalThis & {

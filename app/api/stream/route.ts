@@ -1,6 +1,7 @@
-import { getArbitrageData } from '../../../lib/arbitrage';
-import { getDucatData } from '../../../lib/ducats';
-import { subscribe, type Dispatcher, type StreamEvent } from '../../../lib/subscriptions';
+import { getArbitrageData } from "@/lib/arbitrage";
+import { getDucatData } from "@/lib/ducats";
+import { getRefreshSnapshot } from "@/lib/refresh";
+import { subscribe, type Dispatcher, type StreamEvent } from "@/lib/subscriptions";
 
 const SSE_HEADERS = {
   'Content-Type': 'text/event-stream',
@@ -26,6 +27,7 @@ export async function GET(): Promise<Response> {
         sseMessage('snapshot', {
           arbitrage: getArbitrageData(),
           ducats: getDucatData(),
+          refresh: getRefreshSnapshot(),
         })
       );
 

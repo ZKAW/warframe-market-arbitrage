@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, type ReactNode } from 'react';
 import DataTable, { type Column, type SortDirection } from './components/DataTable';
 import Button from './components/Button';
 import Tooltip from './components/Tooltip';
-import type { ArbitrageEntry, DucatEntry, PartFill } from '../lib/types';
-
+import type { ArbitrageEntry, DucatEntry, PartFill, RefreshSnapshot, RefreshStatusEntry } from "@/lib/types";
+import RefreshButton from './components/RefreshButton';
 
 type Status = 'loading' | 'ok' | 'error';
 
@@ -18,6 +18,7 @@ interface PipelinePayload {
 interface SnapshotPayload {
   arbitrage: PipelinePayload;
   ducats: PipelinePayload;
+  refresh: RefreshSnapshot;
 }
 
 interface SliceState<T extends Row> {
@@ -29,9 +30,11 @@ interface SliceState<T extends Row> {
   // RelativeTime 1s clock so "X ago" stays live.
   lastCycleCompletedAt: string | null;
 }
+
 function emptySlice<T extends Row>(): SliceState<T> {
   return { rows: [], ready: false, fetched: null, lastCycleCompletedAt: null };
 }
+
 interface TabConfig<T> {
   label: string;
   emptyMessage: string;
@@ -97,8 +100,6 @@ function HeaderUpdatedTime({
     return () => clearInterval(id);
   }, []);
 
-  // If the condition is true, it renders the separator and text. 
-  // If false, it evaluates to false and React renders nothing.
   const cyclePart = !lastCycleCompletedAt && (
     <>
       <span className="pulse-sep">·</span>
@@ -115,11 +116,6 @@ function HeaderUpdatedTime({
 }
 
 // "Min. profit" = 48h volume-weighted average sale price minus parts cost.
-// `arbitrage_value` (Profit) uses the single cheapest live sell order for
-// the set, which is sometimes a misplaced/outlier listing far under what
-// the set actually trades for. avg_price is a much better estimate of what
-// a buyer would really pay, so avg_price - parts cost is a floor on the
-// profit a flip could realistically clear.
 function computeMinProfit(r: ArbitrageEntry): number | null {
   if (r.avg_price == null) return null;
   return r.avg_price - r.total_part_price;
@@ -127,23 +123,12 @@ function computeMinProfit(r: ArbitrageEntry): number | null {
 
 type ProfitTier = 'red' | 'orange' | 'green';
 
-// red: the real (average-price) profit is negative - the listed set price
-//   is likely a fluke; flipping at real market rates would lose money.
-// green: the real profit floor matches or beats the headline Profit - a
-//   trustworthy, possibly even better, opportunity.
-// orange: real profit is positive but below the headline number - still
-//   profitable, just not as good as Profit alone suggests.
 function minProfitTier(minProfit: number, profit: number): ProfitTier {
   if (minProfit < 0) return 'red';
   if (minProfit >= profit) return 'green';
   return 'orange';
 }
 
-// Groups a Parts cost breakdown by part slug, preserving first-seen order,
-// so the hover tooltip can show "part slug -> seller @ price" grouped under
-// each part's own heading instead of one flat list. A part appears with
-// more than one fill when a single seller's stock wasn't enough to cover
-// the set's required quantity of it (see consumePartOrders in lib/arbitrage.ts).
 function groupPartFills(breakdown: PartFill[]): Map<string, PartFill[]> {
   const bySlug = new Map<string, PartFill[]>();
   for (const fill of breakdown) {
@@ -154,9 +139,6 @@ function groupPartFills(breakdown: PartFill[]): Map<string, PartFill[]> {
   return bySlug;
 }
 
-// Turns a raw slug like "vectis_prime_barrel" into "Vectis Prime Barrel"
-// for the parts-cost tooltip - the raw slug is fine in a sortable column
-// but hard to scan when several show up stacked in a hover card.
 function formatSlug(slug: string): string {
   return slug
     .split('_')
@@ -237,9 +219,7 @@ const TABS = {
                 <div className="parts-tooltip">
                   {[...bySlug.entries()].map(([slug, fills]) => (
                     <div className="parts-tooltip-part" key={slug}>
-                      {/* Only the part name is rendered here; the green total is gone */}
                       <div className="parts-tooltip-slug">{formatSlug(slug)}</div>
-                      
                       {fills.map((f, i) => (
                         <div className="parts-tooltip-fill" key={i}>
                           <span className="parts-tooltip-seller">{f.username}</span>
@@ -332,8 +312,65 @@ export default function Home() {
   const [ducats, setDucats] = useState<SliceState<DucatEntry>>(emptySlice);
   const [status, setStatus] = useState<Status>('loading');
 
+  const [refreshStatus, setRefreshStatus] = useState<Record<TabKey, Map<string, RefreshStatusEntry>>>({
+    arbitrage: new Map(),
+    ducats: new Map(),
+  });
+
+  function rowSlug(row: Row): string {
+    return (row as ArbitrageEntry).set ?? (row as DucatEntry).item ?? '';
+  }
+
+  async function requestRowRefresh(pipeline: TabKey, slug: string) {
+    setRefreshStatus((prev) => {
+      const next = new Map(prev[pipeline]);
+      next.set(slug, { slug, status: 'queued', requestedAt: Date.now(), completedAt: null });
+      return { ...prev, [pipeline]: next };
+    });
+    try {
+      const res = await fetch('/api/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pipeline, slug }),
+      });
+      if (!res.ok) throw new Error('refresh request rejected');
+    } catch {
+      setRefreshStatus((prev) => {
+        const next = new Map(prev[pipeline]);
+        next.delete(slug);
+        return { ...prev, [pipeline]: next };
+      });
+    }
+  }
+
   const tab = TABS[active];
   const slice = active === 'arbitrage' ? arbitrage : ducats;
+
+const columns = useMemo<Column<Row>[]>(() => {
+    const base = tab.columns as unknown as Column<Row>[];
+    return base.map((col) => {
+      if (col.key !== tab.cardPrimary) return col;
+      const originalRender = col.render;
+      return {
+        ...col,
+        render: (row: Row) => {
+          const slug = rowSlug(row);
+          const entry = refreshStatus[active].get(slug);
+          return (
+            <span className="cell-with-refresh">
+              {originalRender 
+                ? originalRender(row) 
+                : ((row as unknown as Record<string, unknown>)[col.key] as ReactNode)}
+              <RefreshButton
+                status={entry?.status ?? 'idle'}
+                onRequest={() => requestRowRefresh(active, slug)}
+              />
+            </span>
+          );
+        },
+      };
+    });
+  }, [tab, active, refreshStatus]);
 
   useEffect(() => {
     const stream = new EventSource('/api/stream');
@@ -353,7 +390,19 @@ export default function Home() {
         fetched: now,
         lastCycleCompletedAt: payload.ducats.lastCycleCompletedAt,
       });
+      setRefreshStatus({
+        arbitrage: new Map(payload.refresh.arbitrage.map((r) => [r.slug, r])),
+        ducats: new Map(payload.refresh.ducats.map((r) => [r.slug, r])),
+      });
       setStatus('ok');
+    };
+
+    const onRefresh = (e: MessageEvent<string>) => {
+      const payload = JSON.parse(e.data) as RefreshSnapshot;
+      setRefreshStatus({
+        arbitrage: new Map(payload.arbitrage.map((r) => [r.slug, r])),
+        ducats: new Map(payload.ducats.map((r) => [r.slug, r])),
+      });
     };
 
     const onArbitrage = (e: MessageEvent<string>) => {
@@ -378,30 +427,24 @@ export default function Home() {
       setStatus('ok');
     };
 
-    // EventSource fires onerror on transient drops AND on a hard close; it
-    // auto-reconnects, so only surface the error state if we have nothing
-    // to show yet. Once we've had data, keep showing the stale snapshot
-    // while the stream reconnects in the background.
     const onError = () => {
       if (!arbitrage.fetched && !ducats.fetched) setStatus('error');
     };
 
+    stream.addEventListener('refresh', onRefresh);
     stream.addEventListener('snapshot', onSnapshot);
     stream.addEventListener('arbitrage', onArbitrage);
     stream.addEventListener('ducats', onDucats);
     stream.addEventListener('error', onError);
 
     return () => {
+      stream.removeEventListener('refresh', onRefresh);
       stream.removeEventListener('snapshot', onSnapshot);
       stream.removeEventListener('arbitrage', onArbitrage);
       stream.removeEventListener('ducats', onDucats);
       stream.removeEventListener('error', onError);
       stream.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- onError reads
-    // stale slice state, but the intent is "no data yet"; re-subscribing on
-    // every fetch would thrash the stream. The once-per-mount subscription
-    // is correct.
   }, []);
 
   return (
@@ -438,13 +481,9 @@ export default function Home() {
       ) : status === 'ok' && !slice.ready && slice.rows.length === 0 ? (
         <div className="empty-state">First scrape is still running - this can take a few minutes.</div>
       ) : (
-        // The active tab's columns are typed to its own row shape (ArbitrageEntry
-        // or DucatEntry) for safety while authoring TABS above; here we render
-        // whichever is active against the matching slice of `rows`, so we widen
-        // to the shared Row union at this single boundary.
         <DataTable
           key={active}
-          columns={tab.columns as unknown as Column<Row>[]}
+          columns={columns}
           rows={slice.rows}
           emptyMessage={tab.emptyMessage}
           fixedTag={tab.fixedTag}

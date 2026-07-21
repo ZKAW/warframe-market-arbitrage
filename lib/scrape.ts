@@ -5,6 +5,7 @@ import { processDucatSlug, getDucatData } from './ducats';
 import { loadCatalog } from './catalog';
 import { safeGetRequest, FETCH_FAILED, type FetchFailed } from './httpClient';
 import { broadcast } from './subscriptions';
+import { getRefreshSnapshot } from './refresh';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,6 +41,51 @@ function pickDueSlug(
     }
   }
   return due;
+}
+
+// Earliest still-queued manual refresh request for this pipeline whose
+// slug is (a) not already being fetched and (b) still in the live catalog
+// (it may have been delisted between the click and now). Checked ahead of
+// pickDueSlug so a manual refresh always wins regardless of its deadline.
+function pickPriorityRefresh(pipeline: 'arbitrage' | 'ducats'): string | null {
+  const { refreshRequests, inFlight } = store.pipelineState[pipeline];
+  const inCatalog = pipeline === 'arbitrage' ? store.catalog.sets : store.catalog.primes;
+  let chosen: string | null = null;
+  let earliest = Number.POSITIVE_INFINITY;
+  for (const [slug, req] of refreshRequests) {
+    if (req.status !== 'queued' || inFlight.has(slug) || !inCatalog.has(slug)) continue;
+    if (req.requestedAt < earliest) {
+      earliest = req.requestedAt;
+      chosen = slug;
+    }
+  }
+  return chosen;
+}
+
+function hasQueuedRefreshRequest(pipeline: 'arbitrage' | 'ducats'): boolean {
+  const { refreshRequests, inFlight } = store.pipelineState[pipeline];
+  for (const [slug, req] of refreshRequests) {
+    if (req.status === 'queued' && !inFlight.has(slug)) return true;
+  }
+  return false;
+}
+
+// Breaks a long "nothing due" sleep into short chunks so a manual refresh
+// request lands within ~500ms of being clicked, instead of waiting out
+// whatever coldRetryMs-sized sleep a worker had already committed to.
+async function sleepInterruptible(
+  ms: number,
+  pipeline: 'arbitrage' | 'ducats',
+  token: { cancelled: boolean }
+): Promise<void> {
+  const STEP_MS = 500;
+  let remaining = ms;
+  while (remaining > 0 && !token.cancelled) {
+    if (hasQueuedRefreshRequest(pipeline)) return;
+    const chunk = Math.min(STEP_MS, remaining);
+    await sleep(chunk);
+    remaining -= chunk;
+  }
 }
 
 // Time until the soonest slug crosses the staleness budget. Only called
@@ -137,20 +183,21 @@ function runStaleDrivenLoop(
 ): void {
   const token = { cancelled: false };
   store.loopTokens.set(name, token);
-  const { deadlines, inFlight } = store.pipelineState[name];
+  const { deadlines, inFlight, refreshRequests } = store.pipelineState[name];
 
   const worker = async (workerId: number): Promise<void> => {
     while (!token.cancelled) {
-      // No build-completion gate: store.catalog.sets/primes only ever
-      // contain fully-resolved entries, so it's always safe to sweep
-      // whatever's currently there - including mid-build, as entries
-      // stream in one by one. This lets the very first cold start (and
-      // every rebuild after it) surface deals as soon as the first
-      // set/prime resolves instead of sitting idle until the whole
-      // ~240-set catalog finishes. When the catalog is still empty
-      // (e.g. seconds after startup), pickDueSlug just returns null and
-      // we fall through to the sleep-and-recheck branch below.
-      const slug = pickDueSlug(name, Date.now());
+      const prioritySlug = pickPriorityRefresh(name);
+      const slug = prioritySlug ?? pickDueSlug(name, Date.now());
+
+      if (prioritySlug) {
+        const req = refreshRequests.get(prioritySlug);
+        if (req) {
+          req.status = 'in-progress';
+          broadcast('refresh', getRefreshSnapshot());
+        }
+      }
+
       if (slug) {
         inFlight.add(slug);
         try {
@@ -163,30 +210,25 @@ function runStaleDrivenLoop(
           inFlight.delete(slug);
         }
         if (token.cancelled) return;
-        // Stamp a fresh deadline regardless of outcome (profitable,
-        // pruned, transient-fail). This is the key behavior that makes
-        // the budget drive the queue for unprofitable slugs too - the
-        // old cycle model would re-evaluate pruned rows on every pass
-        // because they had no last_updated. A subsequent catalog rebuild
-        // that drops this slug cleans up its deadline via the prune pass.
         deadlines.set(slug, Date.now() + config.hotRetryIntervalMs);
+        if (prioritySlug) {
+          const req = refreshRequests.get(prioritySlug);
+          if (req) {
+            req.status = 'done';
+            req.completedAt = Date.now();
+            broadcast('refresh', getRefreshSnapshot());
+          }
+        }
         markReady();
         continue;
       }
 
-      // Nothing due: sleep until the soonest deadline, then re-pick.
-      // Cap the sleep at coldRetryMs so a cancelled token is observed
-      // promptly and so newly-stale rows (catalog grew, deadline moved)
-      // are picked up without a full-budget wait.
       const wait = msUntilNextDue(name);
       if (wait <= 0) continue;
-      await sleep(Math.min(wait, config.coldRetryMs));
+      await sleepInterruptible(Math.min(wait, config.coldRetryMs), name, token);
     }
   };
 
-  // Spin up the worker pool. Each worker is an independent loop; we never
-  // await Promise.all because runStaleDrivenLoop must return synchronously
-  // to startScrapeLoop. Workers run until token.cancelled.
   for (let i = 0; i < config.hotConcurrency; i++) {
     void worker(i);
   }

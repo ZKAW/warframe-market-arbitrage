@@ -83,3 +83,15 @@ export interface OrderEntry {
   user?: { status?: string; ingameName?: string; ingame_name?: string };
   [key: string]: unknown;
 }
+
+export type RefreshLifecycleStatus = 'queued' | 'in-progress' | 'done';
+
+export interface RefreshStatusEntry {
+  slug: string;
+  status: RefreshLifecycleStatus;
+  requestedAt: number;
+  completedAt: number | null;
+}
+
+export type RefreshPipeline = 'arbitrage' | 'ducats';
+export type RefreshSnapshot = Record<RefreshPipeline, RefreshStatusEntry[]>;

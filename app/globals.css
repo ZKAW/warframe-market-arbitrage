@@ -114,6 +114,9 @@ main {
   .sort-icon {
     transition: none;
   }
+  .refresh-spin {
+    animation: none;
+  }
   .tooltip-bubble {
     animation: none;
   }
@@ -902,5 +905,70 @@ table a:hover {
 
   .empty-state {
     padding: 2rem 1rem;
+  }
+}
+
+.cell-with-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 150ms ease-out, border-color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent-warm);
+  background: color-mix(in srgb, var(--accent-warm) 8%, transparent);
+}
+
+.refresh-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.refresh-btn:disabled {
+  cursor: default;
+}
+
+.refresh-btn-queued,
+.refresh-btn-in-progress {
+  color: var(--accent-warm);
+  border-color: var(--accent-warm);
+}
+
+.refresh-btn-done {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.refresh-spin {
+  animation: refresh-spin 0.8s linear infinite;
+}
+
+@keyframes refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1260px) {
+  .refresh-btn {
+    width: 34px;
+    height: 34px;
   }
 }

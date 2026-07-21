@@ -1,4 +1,4 @@
-import type { ArbitrageEntry, DucatEntry, WarframeItem } from './types';
+import type { ArbitrageEntry, DucatEntry, RefreshLifecycleStatus, WarframeItem } from './types';
 
 export interface SetComponent {
   slug: string;
@@ -70,9 +70,15 @@ interface Store {
   //     workers from racing on the same soonest-deadline slug when
   //     multiple become due simultaneously.
   pipelineState: {
-    arbitrage: { deadlines: Map<string, number>; inFlight: Set<string> };
-    ducats: { deadlines: Map<string, number>; inFlight: Set<string> };
+    arbitrage: { deadlines: Map<string, number>; inFlight: Set<string>; refreshRequests: Map<string, PendingRefresh> };
+    ducats: { deadlines: Map<string, number>; inFlight: Set<string>; refreshRequests: Map<string, PendingRefresh> };
   };
+}
+
+export interface PendingRefresh {
+  status: RefreshLifecycleStatus;
+  requestedAt: number;
+  completedAt: number | null;
 }
 
 type GlobalWithStore = typeof globalThis & {
@@ -93,8 +99,8 @@ function initStore(): Store {
       lastCycleCompletedAt: { arbitrage: null, ducats: null },
       catalog: { sets: new Map(), primes: new Map(), builtAt: null },
       pipelineState: {
-        arbitrage: { deadlines: new Map(), inFlight: new Set() },
-        ducats: { deadlines: new Map(), inFlight: new Set() },
+        arbitrage: { deadlines: new Map(), inFlight: new Set(), refreshRequests: new Map() },
+        ducats: { deadlines: new Map(), inFlight: new Set(), refreshRequests: new Map() },
       },
     };
   }
