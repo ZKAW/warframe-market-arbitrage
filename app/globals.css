@@ -620,6 +620,77 @@ table a:hover {
   border-bottom-color: #1a2130;
 }
 
+/* --- Parts cost breakdown tooltip (arbitrage "Parts cost" column) ---
+   Wider than the default 220px bubble because it needs to fit "seller
+   name" and "price × qty" side by side without wrapping every line -
+   the default width is what made this cramped and hard to scan. */
+.tooltip-bubble-wide {
+  max-width: min(300px, calc(100vw - 2rem));
+  padding: 0.65rem 0.75rem;
+}
+
+.parts-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+/* Divider between parts instead of everything running together - the
+   main thing missing before: nothing visually separated one part's fills
+   from the next. */
+.parts-tooltip-part + .parts-tooltip-part {
+  padding-top: 0.65rem;
+  border-top: 1px solid var(--border);
+}
+
+.parts-tooltip-part-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+
+.parts-tooltip-slug {
+  font-weight: 600;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.parts-tooltip-part-total {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* Seller left, price right - a real two-column row instead of one
+   "Name · 20p" string, so a long ingame name doesn't push the price
+   around or force an awkward wrap. */
+.parts-tooltip-fill {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.7rem;
+  line-height: 1.55;
+}
+
+.parts-tooltip-seller {
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.parts-tooltip-price {
+  font-family: var(--font-mono);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .empty-state {
   border: 1px dashed var(--border);
   border-radius: 6px;

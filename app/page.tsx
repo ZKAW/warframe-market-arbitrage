@@ -143,7 +143,7 @@ function minProfitTier(minProfit: number, profit: number): ProfitTier {
 // so the hover tooltip can show "part slug -> seller @ price" grouped under
 // each part's own heading instead of one flat list. A part appears with
 // more than one fill when a single seller's stock wasn't enough to cover
-// the set's required quantity of it (see consumePartOrders, lib/arbitrage.ts).
+// the set's required quantity of it (see consumePartOrders in lib/arbitrage.ts).
 function groupPartFills(breakdown: PartFill[]): Map<string, PartFill[]> {
   const bySlug = new Map<string, PartFill[]>();
   for (const fill of breakdown) {
@@ -152,6 +152,16 @@ function groupPartFills(breakdown: PartFill[]): Map<string, PartFill[]> {
     else bySlug.set(fill.slug, [fill]);
   }
   return bySlug;
+}
+
+// Turns a raw slug like "vectis_prime_barrel" into "Vectis Prime Barrel"
+// for the parts-cost tooltip - the raw slug is fine in a sortable column
+// but hard to scan when several show up stacked in a hover card.
+function formatSlug(slug: string): string {
+  return slug
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
 }
 
 const TABS = {
@@ -227,10 +237,15 @@ const TABS = {
                 <div className="parts-tooltip">
                   {[...bySlug.entries()].map(([slug, fills]) => (
                     <div className="parts-tooltip-part" key={slug}>
-                      <div className="parts-tooltip-slug">{slug}</div>
+                      {/* Only the part name is rendered here; the green total is gone */}
+                      <div className="parts-tooltip-slug">{formatSlug(slug)}</div>
+                      
                       {fills.map((f, i) => (
                         <div className="parts-tooltip-fill" key={i}>
-                          {f.username} · {f.platinum}p{f.quantity > 1 ? ` ×${f.quantity}` : ''}
+                          <span className="parts-tooltip-seller">{f.username}</span>
+                          <span className="parts-tooltip-price">
+                            {f.platinum}p{f.quantity > 1 ? ` × ${f.quantity}` : ''}
+                          </span>
                         </div>
                       ))}
                     </div>
